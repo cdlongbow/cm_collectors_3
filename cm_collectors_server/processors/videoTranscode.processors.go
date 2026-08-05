@@ -12,9 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +28,8 @@ import (
 
 type VideoTranscodeConfig struct {
 	Container        string  `json:"container"`
+	OutputMode       string  `json:"outputMode"`
+	OutputFileName   string  `json:"outputFileName"`
 	VideoCodec       string  `json:"videoCodec"`
 	QualityMode      string  `json:"qualityMode"`
 	CRF              int     `json:"crf"`
@@ -39,9 +44,27 @@ type VideoTranscodeConfig struct {
 	GPUEncoder       string  `json:"gpuEncoder"`
 }
 
+type VideoEditSegment struct {
+	ID    string  `json:"id"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+}
+
+type VideoEditPlan struct {
+	Version  int                `json:"version"`
+	Segments []VideoEditSegment `json:"segments"`
+}
+
+type VideoTranscodeEditPlanRequest struct {
+	Plan           VideoEditPlan `json:"plan"`
+	OutputMode     string        `json:"outputMode"`
+	OutputFileName string        `json:"outputFileName"`
+}
+
 func DefaultVideoTranscodeConfig() VideoTranscodeConfig {
 	return VideoTranscodeConfig{
 		Container:        "mp4",
+		OutputMode:       "new_file",
 		VideoCodec:       "copy",
 		QualityMode:      "crf",
 		CRF:              23,
@@ -54,9 +77,12 @@ func DefaultVideoTranscodeConfig() VideoTranscodeConfig {
 
 type VideoTranscodeTaskView struct {
 	models.VideoTranscodeTask
-	Config       VideoTranscodeConfig `json:"config"`
-	FilesBasesID string               `json:"filesBasesId"`
-	CoverPoster  string               `json:"coverPoster"`
+	Config              VideoTranscodeConfig `json:"config"`
+	EditPlan            VideoEditPlan        `json:"editPlan"`
+	FilesBasesID        string               `json:"filesBasesId"`
+	CoverPoster         string               `json:"coverPoster"`
+	CanRetryReplacement bool                 `json:"canRetryReplacement"`
+	CanSaveAsNewFile    bool                 `json:"canSaveAsNewFile"`
 }
 
 type VideoTranscodeAddRequest struct {
@@ -75,6 +101,16 @@ type VideoTranscodeIDsRequest struct {
 	IDs []string `json:"ids"`
 }
 
+type VideoTranscodeStartRequest struct {
+	IDs       []string `json:"ids"`
+	EnableGPU bool     `json:"enableGpu"`
+}
+
+type VideoTranscodeStartResult struct {
+	Queued     int `json:"queued"`
+	EnabledGPU int `json:"enabledGpu"`
+}
+
 type VideoTranscodeUpdateConfigRequest struct {
 	IDs    []string             `json:"ids"`
 	Config VideoTranscodeConfig `json:"config"`
@@ -83,6 +119,24 @@ type VideoTranscodeUpdateConfigRequest struct {
 type VideoTranscodeResetResult struct {
 	Reset   int `json:"reset"`
 	Skipped int `json:"skipped"`
+}
+
+type VideoTranscodeEditPlanResult struct {
+	Plan           VideoEditPlan        `json:"plan"`
+	EditedDuration float64              `json:"editedDuration"`
+	HasEdits       bool                 `json:"hasEdits"`
+	Config         VideoTranscodeConfig `json:"config"`
+	ConfigAdjusted bool                 `json:"configAdjusted"`
+}
+
+const videoTranscodeVerificationTimeout = 2 * time.Minute
+const videoTranscodeReplacementLockTimeout = 5 * time.Second
+const videoTranscodeReplacementLockAttempts = 3
+
+type videoTranscodeVerifyResult struct {
+	Info processorsffmpeg.VideoFormatInfo
+	Stat os.FileInfo
+	Err  error
 }
 
 type videoTranscodeCandidate struct {
@@ -120,8 +174,28 @@ type mediaPathLockRegistry struct {
 
 var mediaPathLocks = &mediaPathLockRegistry{locks: make(map[string]*sync.RWMutex)}
 
-func (r *mediaPathLockRegistry) get(path string) *sync.RWMutex {
+type mediaReadRegistry struct {
+	mu      sync.Mutex
+	nextID  uint64
+	readers map[string]map[uint64]context.CancelFunc
+	blocked map[string]int
+}
+
+var activeMediaReads = &mediaReadRegistry{
+	readers: make(map[string]map[uint64]context.CancelFunc),
+	blocked: make(map[string]int),
+}
+
+func mediaPathKey(path string) string {
 	cleaned := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+func (r *mediaPathLockRegistry) get(path string) *sync.RWMutex {
+	cleaned := mediaPathKey(path)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	lock := r.locks[cleaned]
@@ -139,10 +213,136 @@ func lockMediaForRead(path string) func() {
 	return lock.RUnlock
 }
 
+// registerMediaRead 记录仍在读取媒体文件的 HTTP 请求。替换源文件前会取消这些请求，
+// 让 Windows 上的播放句柄及时关闭，避免替换流程永久等待读锁。
+func registerMediaRead(path string, parent context.Context) (context.Context, func()) {
+	cleaned := mediaPathKey(path)
+	ctx, cancel := context.WithCancel(parent)
+	activeMediaReads.mu.Lock()
+	if activeMediaReads.blocked[cleaned] > 0 {
+		activeMediaReads.mu.Unlock()
+		cancel()
+		return ctx, cancel
+	}
+	activeMediaReads.nextID++
+	id := activeMediaReads.nextID
+	readers := activeMediaReads.readers[cleaned]
+	if readers == nil {
+		readers = make(map[uint64]context.CancelFunc)
+		activeMediaReads.readers[cleaned] = readers
+	}
+	readers[id] = cancel
+	activeMediaReads.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cancel()
+			activeMediaReads.mu.Lock()
+			delete(activeMediaReads.readers[cleaned], id)
+			if len(activeMediaReads.readers[cleaned]) == 0 {
+				delete(activeMediaReads.readers, cleaned)
+			}
+			activeMediaReads.mu.Unlock()
+		})
+	}
+	return ctx, release
+}
+
+func cancelMediaReads(path string) {
+	cleaned := mediaPathKey(path)
+	activeMediaReads.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(activeMediaReads.readers[cleaned]))
+	for _, cancel := range activeMediaReads.readers[cleaned] {
+		cancels = append(cancels, cancel)
+	}
+	activeMediaReads.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+// blockMediaReads 在替换期间阻止新的播放请求再次取得读锁，并取消已经存在的请求。
+func blockMediaReads(path string) func() {
+	cleaned := mediaPathKey(path)
+	activeMediaReads.mu.Lock()
+	activeMediaReads.blocked[cleaned]++
+	cancels := make([]context.CancelFunc, 0, len(activeMediaReads.readers[cleaned]))
+	for _, cancel := range activeMediaReads.readers[cleaned] {
+		cancels = append(cancels, cancel)
+	}
+	activeMediaReads.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			activeMediaReads.mu.Lock()
+			activeMediaReads.blocked[cleaned]--
+			if activeMediaReads.blocked[cleaned] <= 0 {
+				delete(activeMediaReads.blocked, cleaned)
+			}
+			activeMediaReads.mu.Unlock()
+		})
+	}
+}
+
+func lockMediaForReplacement(ctx context.Context, path string, timeout time.Duration) (func(), error) {
+	lock := mediaPathLocks.get(path)
+	deadline := time.Now().Add(timeout)
+	for {
+		if lock.TryLock() {
+			return lock.Unlock, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("等待源视频播放请求释放超过 %s", timeout)
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func lockMediaForReplacementWithRetry(ctx context.Context, path string) (func(), error) {
+	var lastErr error
+	for attempt := 1; attempt <= videoTranscodeReplacementLockAttempts; attempt++ {
+		unlock, err := lockMediaForReplacement(ctx, path, videoTranscodeReplacementLockTimeout)
+		if err == nil {
+			return unlock, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		cancelMediaReads(path)
+		if attempt < videoTranscodeReplacementLockAttempts {
+			timer := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return nil, fmt.Errorf("自动重试 %d 次后仍无法释放源视频读取句柄: %w",
+		videoTranscodeReplacementLockAttempts, lastErr)
+}
+
 type VideoTranscode struct{}
 
 func InitVideoTranscode() {
 	db := core.DBS()
+	interruptedAt := datatype.CustomTime(core.TimeNow())
 	var ordinaryInterrupted []models.VideoTranscodeTask
 	_ = db.Where("status IN ?", []string{
 		models.VideoTranscodeStatusProbing,
@@ -163,6 +363,7 @@ func InitVideoTranscode() {
 		Updates(map[string]interface{}{
 			"status":        models.VideoTranscodeStatusInterrupted,
 			"error_message": "服务在任务执行期间退出，请确认源文件后重试",
+			"finished_at":   &interruptedAt,
 		})
 	recoverCriticalVideoTranscodeTasks()
 	go transcodeManager.loop()
@@ -173,6 +374,8 @@ func InitVideoTranscode() {
 func recoverCriticalVideoTranscodeTasks() {
 	var tasks []models.VideoTranscodeTask
 	if err := core.DBS().Where("status IN ?", []string{
+		models.VideoTranscodeStatusSavingOutput,
+		models.VideoTranscodeStatusRetryingReplace,
 		models.VideoTranscodeStatusReplacing,
 		models.VideoTranscodeStatusRefreshingMetadata,
 	}).Find(&tasks).Error; err != nil {
@@ -184,6 +387,15 @@ func recoverCriticalVideoTranscodeTasks() {
 }
 
 func recoverCriticalVideoTranscodeTask(task models.VideoTranscodeTask) {
+	if task.Status == models.VideoTranscodeStatusSavingOutput {
+		recoverVideoTranscodeNewOutput(task)
+		return
+	}
+	if task.Status == models.VideoTranscodeStatusRetryingReplace &&
+		(task.BackupPath == "" || !fileExistsForTranscode(task.BackupPath)) {
+		setVideoTranscodeFailure(task.ID, errors.New("服务在重试替换前退出，已保留校验成功的临时成片，可再次手动重试替换"))
+		return
+	}
 	if task.BackupPath == "" {
 		markVideoTranscodeInterrupted(task.ID, "服务在文件替换阶段退出，但任务没有记录备份路径，请人工检查")
 		return
@@ -263,6 +475,40 @@ func recoverCriticalVideoTranscodeTask(task models.VideoTranscodeTask) {
 	markVideoTranscodeInterrupted(task.ID, message)
 }
 
+func recoverVideoTranscodeNewOutput(task models.VideoTranscodeTask) {
+	config := DefaultVideoTranscodeConfig()
+	if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil || config.OutputMode != "new_file" {
+		markVideoTranscodeInterrupted(task.ID, "另存新文件任务的参数无法恢复，请重新执行")
+		return
+	}
+	lock := mediaPathLocks.get(task.OutputPath)
+	lock.Lock()
+	defer lock.Unlock()
+	if !fileExistsForTranscode(task.OutputPath) {
+		if !isVideoTranscodeTemporaryPathForTask(task) || !fileExistsForTranscode(task.TemporaryPath) {
+			markVideoTranscodeInterrupted(task.ID, "服务在保存新文件时退出，未找到可恢复的输出文件")
+			return
+		}
+		if err := publishVideoTranscodeOutput(task.TemporaryPath, task.OutputPath); err != nil {
+			markVideoTranscodeInterrupted(task.ID, "恢复另存的新文件失败: "+err.Error())
+			return
+		}
+	}
+	stat, err := os.Stat(task.OutputPath)
+	if err != nil || (task.OutputSize > 0 && stat.Size() != task.OutputSize) {
+		markVideoTranscodeInterrupted(task.ID, "另存的新文件校验失败，请人工检查输出文件")
+		return
+	}
+	if err := completeVideoTranscodeNewOutput(task.ID, stat.Size(), "服务重启后已恢复另存的新文件"); err != nil {
+		markVideoTranscodeInterrupted(task.ID, "恢复另存的新文件状态失败: "+err.Error())
+		return
+	}
+	if isVideoTranscodeTemporaryPathForTask(task) {
+		_ = os.Remove(task.TemporaryPath)
+	}
+	processorscache.CacheVideoInfoLastUse{}.Invalidate(task.OutputPath)
+}
+
 func fileExistsForTranscode(path string) bool {
 	if path == "" {
 		return false
@@ -272,9 +518,11 @@ func fileExistsForTranscode(path string) bool {
 }
 
 func markVideoTranscodeInterrupted(id, message string) {
+	finished := datatype.CustomTime(core.TimeNow())
 	core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":        models.VideoTranscodeStatusInterrupted,
 		"error_message": message,
+		"finished_at":   &finished,
 	})
 }
 
@@ -434,6 +682,10 @@ func (VideoTranscode) List() ([]VideoTranscodeTaskView, error) {
 	for _, task := range tasks {
 		config := DefaultVideoTranscodeConfig()
 		_ = json.Unmarshal([]byte(task.ConfigJsonData), &config)
+		editPlan := VideoEditPlan{Version: 1}
+		if task.EditPlanJsonData != "" {
+			_ = json.Unmarshal([]byte(task.EditPlanJsonData), &editPlan)
+		}
 		metadata := metadataByDramaSeriesID[task.DramaSeriesID]
 		if task.SourceWidth <= 0 &&
 			metadata.MetadataStatus == models.VideoMetadataStatusSuccess &&
@@ -446,7 +698,7 @@ func (VideoTranscode) List() ([]VideoTranscodeTaskView, error) {
 			task.SourceAudioCodec = metadata.SourceAudioCodec
 			task.SourceVideoBitRate = metadata.SourceVideoBitRate
 		}
-		if task.OutputWidth <= 0 &&
+		if task.OutputWidth <= 0 && config.OutputMode == "replace" &&
 			task.Status == models.VideoTranscodeStatusSuccess &&
 			metadata.MetadataStatus == models.VideoMetadataStatusSuccess &&
 			(task.OutputSize <= 0 || metadata.MetadataFileSize == task.OutputSize) {
@@ -460,13 +712,46 @@ func (VideoTranscode) List() ([]VideoTranscodeTaskView, error) {
 		}
 		image := imagesByResourceID[task.ResourceID]
 		result = append(result, VideoTranscodeTaskView{
-			VideoTranscodeTask: task,
-			Config:             config,
-			FilesBasesID:       image.FilesBasesID,
-			CoverPoster:        image.CoverPoster,
+			VideoTranscodeTask:  task,
+			Config:              config,
+			EditPlan:            editPlan,
+			FilesBasesID:        image.FilesBasesID,
+			CoverPoster:         image.CoverPoster,
+			CanRetryReplacement: canRetryVideoTranscodeReplacement(task, config),
+			CanSaveAsNewFile:    canReuseVerifiedVideoTranscodeOutput(task),
 		})
 	}
 	return result, nil
+}
+
+func canRetryVideoTranscodeReplacement(task models.VideoTranscodeTask, config VideoTranscodeConfig) bool {
+	if config.OutputMode != "replace" || !canReuseVerifiedVideoTranscodeOutput(task) {
+		return false
+	}
+	if !strings.Contains(task.ErrorMessage, "释放源视频读取句柄失败") &&
+		!strings.Contains(task.ErrorMessage, "创建临时回滚文件失败") &&
+		!strings.Contains(task.ErrorMessage, "可再次手动重试替换") {
+		return false
+	}
+	if task.BackupPath != "" {
+		if _, err := os.Stat(task.BackupPath); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func canReuseVerifiedVideoTranscodeOutput(task models.VideoTranscodeTask) bool {
+	if task.Status != models.VideoTranscodeStatusFailed ||
+		!isVideoTranscodeTemporaryPathForTask(task) || task.OutputSize <= 0 {
+		return false
+	}
+	tempStat, err := os.Stat(task.TemporaryPath)
+	if err != nil || tempStat.IsDir() || tempStat.Size() != task.OutputSize {
+		return false
+	}
+	_, err = os.Stat(task.SourcePath)
+	return err == nil
 }
 
 func (VideoTranscode) Capabilities() map[string]interface{} {
@@ -574,15 +859,296 @@ func (VideoTranscode) UpdateConfig(request VideoTranscodeUpdateConfigRequest) er
 	if err := validateVideoTranscodeConfig(request.Config); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(request.Config)
-	query := core.DBS().Model(&models.VideoTranscodeTask{}).Where("status = ?", models.VideoTranscodeStatusDraft)
+	if request.Config.VideoCodec == "copy" || request.Config.AudioCodec == "copy" {
+		query := core.DBS().Model(&models.VideoTranscodeTask{}).
+			Where("status = ? AND edit_plan_json_data <> ''", models.VideoTranscodeStatusDraft)
+		if len(request.IDs) > 0 {
+			query = query.Where("id IN ?", request.IDs)
+		}
+		var editedTaskCount int64
+		if err := query.Count(&editedTaskCount).Error; err != nil {
+			return err
+		}
+		if editedTaskCount > 0 {
+			return errors.New("剪辑任务不能复制音视频流，请选择 H.264/H.265 和 AAC；也可以只选择未剪辑任务应用复制参数")
+		}
+	}
+	query := core.DBS().Where("status = ?", models.VideoTranscodeStatusDraft)
 	if len(request.IDs) > 0 {
 		query = query.Where("id IN ?", request.IDs)
 	}
-	return query.Update("config_json_data", string(data)).Error
+	var tasks []models.VideoTranscodeTask
+	if err := query.Find(&tasks).Error; err != nil {
+		return err
+	}
+	return core.DBS().Transaction(func(tx *gorm.DB) error {
+		for _, task := range tasks {
+			existing := DefaultVideoTranscodeConfig()
+			if err := json.Unmarshal([]byte(task.ConfigJsonData), &existing); err != nil {
+				return fmt.Errorf("解析任务 %s 的转码参数失败: %w", task.ID, err)
+			}
+			updated := request.Config
+			updated.OutputMode = existing.OutputMode
+			updated.OutputFileName = existing.OutputFileName
+			if updated.OutputMode != "new_file" {
+				updated.OutputMode = "replace"
+				updated.OutputFileName = ""
+			}
+			if updated.OutputMode == "new_file" {
+				updated.KeepBackup = false
+			}
+			data, err := json.Marshal(updated)
+			if err != nil {
+				return err
+			}
+			result := tx.Model(&models.VideoTranscodeTask{}).
+				Where("id = ? AND status = ?", task.ID, models.VideoTranscodeStatusDraft).
+				Update("config_json_data", string(data))
+			if result.Error != nil {
+				return result.Error
+			}
+		}
+		return nil
+	})
 }
 
-func (VideoTranscode) Start(request VideoTranscodeIDsRequest) error {
+func (VideoTranscode) SaveEditPlan(
+	id string,
+	request VideoTranscodeEditPlanRequest,
+) (*VideoTranscodeEditPlanResult, error) {
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.VideoTranscodeStatusDraft {
+		return nil, errors.New("只能编辑待转码任务")
+	}
+	sourceInfo, duration, err := videoTranscodeTaskPreciseSourceInfo(task)
+	if err != nil {
+		return nil, err
+	}
+	plan, editedDuration, hasEdits, err := normalizeVideoEditPlan(request.Plan, duration)
+	if err != nil {
+		return nil, err
+	}
+	if hasEdits && countVideoTranscodeStreams(sourceInfo, "subtitle") > 0 {
+		return nil, errors.New("第一版视频剪辑暂不支持包含字幕轨的源文件")
+	}
+	planJSON := ""
+	if hasEdits {
+		data, marshalErr := json.Marshal(plan)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		planJSON = string(data)
+	}
+	storedEditedDuration := 0.0
+	if hasEdits {
+		storedEditedDuration = editedDuration
+	}
+	config := DefaultVideoTranscodeConfig()
+	if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil {
+		return nil, fmt.Errorf("解析转码参数失败: %w", err)
+	}
+	configAdjusted := false
+	if hasEdits {
+		config, configAdjusted = videoTranscodeConfigForEdit(config)
+	}
+	if request.OutputMode != "" {
+		config.OutputMode = request.OutputMode
+	}
+	if config.OutputMode == "new_file" {
+		config.OutputFileName = strings.TrimSpace(request.OutputFileName)
+		config.KeepBackup = false
+	} else {
+		config.OutputFileName = ""
+	}
+	if err := validateVideoTranscodeConfig(config); err != nil {
+		return nil, fmt.Errorf("转码参数无效: %w", err)
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	result := core.DBS().Model(&models.VideoTranscodeTask{}).
+		Where("id = ? AND status = ?", id, models.VideoTranscodeStatusDraft).
+		Updates(map[string]interface{}{
+			"edit_plan_json_data": planJSON,
+			"edited_duration":     storedEditedDuration,
+			"source_duration":     duration,
+			"config_json_data":    string(configJSON),
+		})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, errors.New("任务状态已经变化，剪辑方案未保存")
+	}
+	return &VideoTranscodeEditPlanResult{
+		Plan:           plan,
+		EditedDuration: editedDuration,
+		HasEdits:       hasEdits,
+		Config:         config,
+		ConfigAdjusted: configAdjusted,
+	}, nil
+}
+
+func videoTranscodeConfigForEdit(config VideoTranscodeConfig) (VideoTranscodeConfig, bool) {
+	adjusted := false
+	if config.VideoCodec != "h264" && config.VideoCodec != "h265" {
+		config.VideoCodec = "h264"
+		config.GPUEncoder = ""
+		adjusted = true
+	}
+	if config.AudioCodec != "aac" {
+		config.AudioCodec = "aac"
+		adjusted = true
+	}
+	return config, adjusted
+}
+
+func (VideoTranscode) Thumbnail(ctx context.Context, id string, at float64) ([]byte, error) {
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.VideoTranscodeStatusDraft {
+		return nil, errors.New("只能为待转码任务生成剪辑缩略图")
+	}
+	duration, err := videoTranscodeTaskSourceDuration(task)
+	if err != nil {
+		return nil, err
+	}
+	if math.IsNaN(at) || math.IsInf(at, 0) {
+		return nil, errors.New("缩略图时间点无效")
+	}
+	at = math.Max(0, math.Min(at, math.Max(0, duration-0.01)))
+	ffmpegPath, err := (processorsffmpeg.FFmpeg{}).IsFFmpegAvailable()
+	if err != nil {
+		return nil, err
+	}
+	unlockMedia := lockMediaForRead(task.SourcePath)
+	defer unlockMedia()
+	cmd := processorsffmpeg.CreateCommandContext(ctx, ffmpegPath,
+		"-hide_banner", "-loglevel", "error",
+		"-ss", strconv.FormatFloat(at, 'f', 3, 64),
+		"-i", task.SourcePath,
+		"-frames:v", "1", "-an", "-sn",
+		"-vf", "scale=240:-2", "-q:v", "4",
+		"-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+	)
+	data, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("生成剪辑缩略图失败: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, errors.New("生成的剪辑缩略图为空")
+	}
+	return data, nil
+}
+
+func videoTranscodeTaskSourceDuration(task *models.VideoTranscodeTask) (float64, error) {
+	if err := validateVideoTranscodeTaskSourceSnapshot(task); err != nil {
+		return 0, err
+	}
+	if task.SourceDuration > 0 {
+		return task.SourceDuration, nil
+	}
+	duration, err := videoTranscodeTaskPreciseSourceDuration(task)
+	if err == nil {
+		task.SourceDuration = duration
+		_ = core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", task.ID).
+			Update("source_duration", duration).Error
+	}
+	return duration, err
+}
+
+func videoTranscodeTaskPreciseSourceDuration(task *models.VideoTranscodeTask) (float64, error) {
+	_, duration, err := videoTranscodeTaskPreciseSourceInfo(task)
+	return duration, err
+}
+
+func videoTranscodeTaskPreciseSourceInfo(
+	task *models.VideoTranscodeTask,
+) (processorsffmpeg.VideoFormatInfo, float64, error) {
+	if err := validateVideoTranscodeTaskSourceSnapshot(task); err != nil {
+		return processorsffmpeg.VideoFormatInfo{}, 0, err
+	}
+	info, err := (processorsffmpeg.VideoInfo{}).GetVideoFormatInfo(task.SourcePath)
+	if err != nil {
+		return processorsffmpeg.VideoFormatInfo{}, 0, err
+	}
+	duration := (processorsffmpeg.VideoInfo{}).GetVideoDuration(info)
+	if duration <= 0 {
+		return processorsffmpeg.VideoFormatInfo{}, 0, errors.New("无法获得有效的视频时长")
+	}
+	return info, duration, nil
+}
+
+func validateVideoTranscodeTaskSourceSnapshot(task *models.VideoTranscodeTask) error {
+	stat, err := os.Stat(task.SourcePath)
+	if err != nil {
+		return err
+	}
+	if stat.IsDir() || stat.Size() != task.SourceSize || stat.ModTime().UnixMilli() != task.SourceModifiedTime {
+		return errors.New("源文件已经变化，请重新加入转码列表")
+	}
+	return nil
+}
+
+func normalizeVideoEditPlan(
+	plan VideoEditPlan,
+	sourceDuration float64,
+) (VideoEditPlan, float64, bool, error) {
+	if sourceDuration <= 0 {
+		return VideoEditPlan{}, 0, false, errors.New("源视频时长无效")
+	}
+	if len(plan.Segments) == 0 {
+		return VideoEditPlan{}, 0, false, errors.New("剪辑方案至少需要保留一个片段")
+	}
+	if len(plan.Segments) > 200 {
+		return VideoEditPlan{}, 0, false, errors.New("剪辑片段不能超过 200 个")
+	}
+	normalized := VideoEditPlan{Version: 1, Segments: make([]VideoEditSegment, len(plan.Segments))}
+	seenIDs := make(map[string]struct{}, len(plan.Segments))
+	for index, segment := range plan.Segments {
+		if math.IsNaN(segment.Start) || math.IsInf(segment.Start, 0) ||
+			math.IsNaN(segment.End) || math.IsInf(segment.End, 0) {
+			return VideoEditPlan{}, 0, false, errors.New("剪辑片段时间无效")
+		}
+		segment.Start = math.Round(segment.Start*1000) / 1000
+		segment.End = math.Round(segment.End*1000) / 1000
+		if segment.Start < 0 || segment.End > sourceDuration+0.05 || segment.End-segment.Start < 0.1 {
+			return VideoEditPlan{}, 0, false, fmt.Errorf("第 %d 个剪辑片段超出源视频范围或短于 0.1 秒", index+1)
+		}
+		segment.End = math.Min(segment.End, sourceDuration)
+		if segment.ID == "" {
+			segment.ID = core.GenerateUniqueID()
+		}
+		if _, exists := seenIDs[segment.ID]; exists {
+			return VideoEditPlan{}, 0, false, errors.New("剪辑片段 ID 重复")
+		}
+		seenIDs[segment.ID] = struct{}{}
+		normalized.Segments[index] = segment
+	}
+	bySourceTime := append([]VideoEditSegment(nil), normalized.Segments...)
+	sort.Slice(bySourceTime, func(i, j int) bool { return bySourceTime[i].Start < bySourceTime[j].Start })
+	for index := 1; index < len(bySourceTime); index++ {
+		if bySourceTime[index].Start < bySourceTime[index-1].End-0.01 {
+			return VideoEditPlan{}, 0, false, errors.New("剪辑片段不能重叠或重复使用同一段画面")
+		}
+	}
+	editedDuration := 0.0
+	for _, segment := range normalized.Segments {
+		editedDuration += segment.End - segment.Start
+	}
+	hasEdits := len(normalized.Segments) != 1 ||
+		normalized.Segments[0].Start > 0.01 ||
+		math.Abs(normalized.Segments[0].End-sourceDuration) > 0.05
+	return normalized, editedDuration, hasEdits, nil
+}
+
+func (VideoTranscode) Start(request VideoTranscodeStartRequest) (*VideoTranscodeStartResult, error) {
 	statuses := []string{
 		models.VideoTranscodeStatusDraft,
 		models.VideoTranscodeStatusFailed,
@@ -595,21 +1161,62 @@ func (VideoTranscode) Start(request VideoTranscodeIDsRequest) error {
 	}
 	var tasks []models.VideoTranscodeTask
 	if err := query.Find(&tasks).Error; err != nil {
-		return err
+		return nil, err
 	}
 	if len(tasks) == 0 {
-		return nil
+		return &VideoTranscodeStartResult{}, nil
+	}
+	startResult := &VideoTranscodeStartResult{}
+	if request.EnableGPU {
+		capabilities := (processorsffmpeg.FFmpeg{}).AvailableGPUEncoders()
+		for index := range tasks {
+			config := DefaultVideoTranscodeConfig()
+			if err := json.Unmarshal([]byte(tasks[index].ConfigJsonData), &config); err != nil {
+				return nil, fmt.Errorf("任务 %s 的转码参数无效: %w", tasks[index].ID, err)
+			}
+			encoder, changed := selectVideoTranscodeGPUEncoder(config, capabilities)
+			if !changed {
+				continue
+			}
+			config.GPUEncoder = encoder
+			if err := validateVideoTranscodeConfig(config); err != nil {
+				return nil, fmt.Errorf("任务 %s 的 GPU 转码参数无效: %w", tasks[index].ID, err)
+			}
+			data, err := json.Marshal(config)
+			if err != nil {
+				return nil, err
+			}
+			update := core.DBS().Model(&models.VideoTranscodeTask{}).
+				Where("id = ? AND status IN ?", tasks[index].ID, statuses).
+				Update("config_json_data", string(data))
+			if update.Error != nil {
+				return nil, update.Error
+			}
+			if update.RowsAffected == 1 {
+				tasks[index].ConfigJsonData = string(data)
+				startResult.EnabledGPU++
+			}
+		}
 	}
 	taskIDs := make([]string, 0, len(tasks))
 	for _, task := range tasks {
+		if task.EditPlanJsonData != "" {
+			config := DefaultVideoTranscodeConfig()
+			if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil {
+				return nil, fmt.Errorf("任务 %s 的转码参数无效: %w", task.ID, err)
+			}
+			if config.VideoCodec == "copy" || config.AudioCodec == "copy" {
+				return nil, fmt.Errorf("任务“%s”包含剪辑方案，请先将视频编码设为 H.264/H.265，并将音频编码设为 AAC", task.ResourceTitle)
+			}
+		}
 		if isVideoTranscodeTemporaryPathForTask(task) {
 			if err := os.Remove(task.TemporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("清理任务 %s 的旧转码临时文件失败: %w", task.ID, err)
+				return nil, fmt.Errorf("清理任务 %s 的旧转码临时文件失败: %w", task.ID, err)
 			}
 		}
 		taskIDs = append(taskIDs, task.ID)
 	}
-	if err := core.DBS().Model(&models.VideoTranscodeTask{}).
+	queueUpdate := core.DBS().Model(&models.VideoTranscodeTask{}).
 		Where("id IN ? AND status IN ?", taskIDs, statuses).
 		Updates(map[string]interface{}{
 			"status":                models.VideoTranscodeStatusQueued,
@@ -631,10 +1238,232 @@ func (VideoTranscode) Start(request VideoTranscodeIDsRequest) error {
 			"warning_message":       "",
 			"started_at":            nil,
 			"finished_at":           nil,
-		}).Error; err != nil {
+		})
+	if queueUpdate.Error != nil {
+		return nil, queueUpdate.Error
+	}
+	startResult.Queued = int(queueUpdate.RowsAffected)
+	transcodeManager.notify()
+	return startResult, nil
+}
+
+func selectVideoTranscodeGPUEncoder(
+	config VideoTranscodeConfig,
+	capabilities []processorsffmpeg.GPUEncoderCapability,
+) (string, bool) {
+	if config.VideoCodec != "h264" && config.VideoCodec != "h265" {
+		return config.GPUEncoder, false
+	}
+	selected := ""
+	for _, capability := range capabilities {
+		for _, codec := range capability.VideoCodecs {
+			if codec != config.VideoCodec {
+				continue
+			}
+			if capability.ID == config.GPUEncoder {
+				return config.GPUEncoder, false
+			}
+			if selected == "" {
+				selected = capability.ID
+			}
+		}
+	}
+	return selected, selected != "" && selected != config.GPUEncoder
+}
+
+// RetryReplacement 复用已经校验成功的临时成片，只重新执行文件替换和元数据刷新。
+func (VideoTranscode) RetryReplacement(id string) error {
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
 		return err
 	}
-	transcodeManager.notify()
+	config := DefaultVideoTranscodeConfig()
+	if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil {
+		return fmt.Errorf("解析转码参数失败: %w", err)
+	}
+	if !canRetryVideoTranscodeReplacement(*task, config) {
+		return errors.New("当前任务没有可安全复用的临时成片，请重置后重新转码")
+	}
+
+	transcodeManager.mu.Lock()
+	if transcodeManager.currentID != "" {
+		transcodeManager.mu.Unlock()
+		return errors.New("当前有其它转码任务正在执行，请稍后重试替换")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	now := datatype.CustomTime(core.TimeNow())
+	claim := core.DBS().Model(&models.VideoTranscodeTask{}).
+		Where("id = ? AND status = ?", id, models.VideoTranscodeStatusFailed).
+		Updates(map[string]interface{}{
+			"status":          models.VideoTranscodeStatusRetryingReplace,
+			"error_message":   "",
+			"warning_message": "",
+			"started_at":      &now,
+			"finished_at":     nil,
+		})
+	if claim.Error != nil || claim.RowsAffected != 1 {
+		transcodeManager.mu.Unlock()
+		cancel()
+		return fmt.Errorf("领取重试替换任务失败: %w", videoTranscodeUpdateError(claim))
+	}
+	transcodeManager.currentID = id
+	transcodeManager.cancel = cancel
+	transcodeManager.mu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			transcodeManager.mu.Lock()
+			transcodeManager.currentID = ""
+			transcodeManager.cancel = nil
+			transcodeManager.mu.Unlock()
+			transcodeManager.notify()
+		}()
+		(VideoTranscode{}).retryReplacement(ctx, task, config)
+	}()
+	return nil
+}
+
+func (VideoTranscode) retryReplacement(
+	ctx context.Context,
+	task *models.VideoTranscodeTask,
+	config VideoTranscodeConfig,
+) {
+	current, outputInfo, outputStat, err := verifyReusableVideoTranscodeOutput(ctx, task, config)
+	if err != nil {
+		setVideoTranscodeFailure(task.ID, err)
+		return
+	}
+	if err := saveVideoTranscodeOutputInfo(task.ID, outputInfo, outputStat); err != nil {
+		setVideoTranscodeFailure(task.ID, fmt.Errorf("保存临时成片信息失败: %w", err))
+		return
+	}
+	if err := replaceVideoTranscodeSource(
+		ctx, task, current, task.TemporaryPath, task.OutputPath, task.BackupPath,
+		outputInfo, outputStat, config,
+	); err != nil {
+		setVideoTranscodeFailure(task.ID, err)
+	}
+}
+
+func verifyReusableVideoTranscodeOutput(
+	ctx context.Context,
+	task *models.VideoTranscodeTask,
+	config VideoTranscodeConfig,
+) (*models.ResourcesDramaSeries, processorsffmpeg.VideoFormatInfo, os.FileInfo, error) {
+	if err := validateVideoTranscodeTaskSourceSnapshot(task); err != nil {
+		return nil, processorsffmpeg.VideoFormatInfo{}, nil,
+			fmt.Errorf("复用临时成片前检查源文件失败: %w", err)
+	}
+	current, err := (models.ResourcesDramaSeries{}).Info(core.DBS(), task.DramaSeriesID)
+	if err != nil {
+		return nil, processorsffmpeg.VideoFormatInfo{}, nil, err
+	}
+	if filepath.Clean(current.Src) != filepath.Clean(task.SourcePath) {
+		return nil, processorsffmpeg.VideoFormatInfo{}, nil,
+			errors.New("资源路径已经变化，已拒绝复用临时成片")
+	}
+	sourceInfo, err := (processorsffmpeg.VideoInfo{}).GetVideoFormatInfo(current.Src)
+	if err != nil {
+		return nil, processorsffmpeg.VideoFormatInfo{}, nil, err
+	}
+	expectedDuration := task.SourceDuration
+	hasEdits := task.EditPlanJsonData != ""
+	if hasEdits && task.EditedDuration > 0 {
+		expectedDuration = task.EditedDuration
+	}
+	if expectedDuration <= 0 {
+		expectedDuration = (processorsffmpeg.VideoInfo{}).GetVideoDuration(sourceInfo)
+	}
+	outputInfo, outputStat, err := verifyVideoTranscodeOutputWithTimeout(
+		ctx, videoTranscodeVerificationTimeout, task.TemporaryPath,
+		expectedDuration, sourceInfo, config, hasEdits,
+	)
+	if err != nil {
+		return nil, outputInfo, outputStat, fmt.Errorf("重新校验临时成片失败: %w", err)
+	}
+	if task.OutputSize > 0 && outputStat.Size() != task.OutputSize {
+		return nil, outputInfo, outputStat, errors.New("临时成片大小已经变化，已拒绝复用")
+	}
+	return current, outputInfo, outputStat, nil
+}
+
+// SaveVerifiedOutputAsNewFile 在替换失败后复用临时成片，保留源文件并另存新文件。
+func (VideoTranscode) SaveVerifiedOutputAsNewFile(id string) error {
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
+		return err
+	}
+	if !canReuseVerifiedVideoTranscodeOutput(*task) {
+		return errors.New("当前任务没有可安全复用的临时成片")
+	}
+	config := DefaultVideoTranscodeConfig()
+	if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil {
+		return fmt.Errorf("解析转码参数失败: %w", err)
+	}
+	config.OutputMode = "new_file"
+	config.OutputFileName = ""
+	_, outputPath, _, err := videoTranscodePaths(task, config)
+	if err != nil {
+		return err
+	}
+	configData, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	transcodeManager.mu.Lock()
+	if transcodeManager.currentID != "" {
+		transcodeManager.mu.Unlock()
+		return errors.New("当前有其它转码任务正在执行，请稍后保存新文件")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	now := datatype.CustomTime(core.TimeNow())
+	claim := core.DBS().Model(&models.VideoTranscodeTask{}).
+		Where("id = ? AND status = ?", id, models.VideoTranscodeStatusFailed).
+		Updates(map[string]interface{}{
+			"status":           models.VideoTranscodeStatusSavingOutput,
+			"config_json_data": string(configData),
+			"output_path":      outputPath,
+			"backup_path":      "",
+			"error_message":    "",
+			"warning_message":  "",
+			"started_at":       &now,
+			"finished_at":      nil,
+		})
+	if claim.Error != nil || claim.RowsAffected != 1 {
+		transcodeManager.mu.Unlock()
+		cancel()
+		return fmt.Errorf("领取保存新文件任务失败: %w", videoTranscodeUpdateError(claim))
+	}
+	task.OutputPath = outputPath
+	task.BackupPath = ""
+	transcodeManager.currentID = id
+	transcodeManager.cancel = cancel
+	transcodeManager.mu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			transcodeManager.mu.Lock()
+			transcodeManager.currentID = ""
+			transcodeManager.cancel = nil
+			transcodeManager.mu.Unlock()
+			transcodeManager.notify()
+		}()
+		_, outputInfo, outputStat, verifyErr := verifyReusableVideoTranscodeOutput(ctx, task, config)
+		if verifyErr != nil {
+			setVideoTranscodeFailure(task.ID, verifyErr)
+			return
+		}
+		if err := saveVideoTranscodeOutputInfo(task.ID, outputInfo, outputStat); err != nil {
+			setVideoTranscodeFailure(task.ID, fmt.Errorf("保存临时成片信息失败: %w", err))
+			return
+		}
+		if err := saveVideoTranscodeNewOutput(ctx, task, task.TemporaryPath, outputPath, outputStat); err != nil {
+			setVideoTranscodeFailure(task.ID, err)
+		}
+	}()
 	return nil
 }
 
@@ -678,6 +1507,8 @@ func (VideoTranscode) ResetBatch(request VideoTranscodeIDsRequest) (*VideoTransc
 				"source_video_codec":    "",
 				"source_audio_codec":    "",
 				"source_video_bit_rate": 0,
+				"edit_plan_json_data":   "",
+				"edited_duration":       0,
 				"status":                models.VideoTranscodeStatusDraft,
 				"progress":              0,
 				"processed_seconds":     0,
@@ -718,6 +1549,68 @@ func isVideoTranscodeTemporaryPathForTask(task models.VideoTranscodeTask) bool {
 		filepath.Clean(filepath.Dir(task.TemporaryPath)) == filepath.Clean(filepath.Dir(task.SourcePath))
 }
 
+// cleanupVideoTranscodeTemporaryFile 只清理由当前任务创建、且仍位于源文件目录中的临时成片。
+// 数据库中的路径即使被意外污染，也不能借由“移除任务”删除任意文件。
+func cleanupVideoTranscodeTemporaryFile(task models.VideoTranscodeTask) error {
+	if task.TemporaryPath == "" || !isVideoTranscodeTemporaryPathForTask(task) {
+		return nil
+	}
+	if err := os.Remove(task.TemporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("清理任务 %s 的转码临时文件失败: %w", task.ID, err)
+	}
+	return nil
+}
+
+func deleteVideoTranscodeTasksWithCleanup(
+	db *gorm.DB,
+	query *gorm.DB,
+	allowedStatuses []string,
+) (int64, error) {
+	var tasks []models.VideoTranscodeTask
+	if err := query.Find(&tasks).Error; err != nil {
+		return 0, err
+	}
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+	var deleted int64
+	for _, task := range tasks {
+		// 先通过带状态条件的删除领取该任务：若它已进入重试或执行态，RowsAffected 为 0，
+		// 随后也不会触碰其正在使用的临时成片。
+		result := db.Unscoped().Where("id = ? AND status IN ?", task.ID, allowedStatuses).
+			Delete(&models.VideoTranscodeTask{})
+		if result.Error != nil {
+			return deleted, result.Error
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+		if err := cleanupVideoTranscodeTemporaryFile(task); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// deleteDiscardableVideoTranscodeTasksByResourceIDs 在资源删除时只清理不再有历史价值、
+// 也不可能仍在执行的草稿和失败任务。成功记录和活动任务保持不变。
+func deleteDiscardableVideoTranscodeTasksByResourceIDs(db *gorm.DB, resourceIDs []string) error {
+	if len(resourceIDs) == 0 {
+		return nil
+	}
+	statuses := []string{
+		models.VideoTranscodeStatusDraft,
+		models.VideoTranscodeStatusFailed,
+	}
+	_, err := deleteVideoTranscodeTasksWithCleanup(
+		db,
+		db.Where("resource_id IN ? AND status IN ?", resourceIDs, statuses),
+		statuses,
+	)
+	return err
+}
+
 func (VideoTranscode) Pause() {
 	transcodeManager.mu.Lock()
 	transcodeManager.paused = true
@@ -742,9 +1635,10 @@ func (VideoTranscode) Cancel(id string) error {
 	if err != nil {
 		return err
 	}
-	if task.Status == models.VideoTranscodeStatusReplacing ||
+	if task.Status == models.VideoTranscodeStatusSavingOutput ||
+		task.Status == models.VideoTranscodeStatusReplacing ||
 		task.Status == models.VideoTranscodeStatusRefreshingMetadata {
-		return errors.New("文件正在替换或刷新元数据，当前阶段不可取消")
+		return errors.New("文件正在保存、替换或刷新元数据，当前阶段不可取消")
 	}
 	transcodeManager.mu.Lock()
 	if transcodeManager.currentID == id && transcodeManager.cancel != nil {
@@ -759,31 +1653,58 @@ func (VideoTranscode) Cancel(id string) error {
 }
 
 func (VideoTranscode) Delete(id string) error {
-	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	db := core.DBS()
+	statuses := []string{
+		models.VideoTranscodeStatusDraft,
+		models.VideoTranscodeStatusSuccess,
+		models.VideoTranscodeStatusFailed,
+		models.VideoTranscodeStatusCancelled,
+		models.VideoTranscodeStatusInterrupted,
+		models.VideoTranscodeStatusRollbackFailed,
+	}
+	var count int64
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var deleteErr error
+		count, deleteErr = deleteVideoTranscodeTasksWithCleanup(
+			tx,
+			tx.Where("id = ? AND status IN ?", id, statuses),
+			statuses,
+		)
+		return deleteErr
+	})
 	if err != nil {
 		return err
 	}
-	if !isVideoTranscodeTerminal(task.Status) && task.Status != models.VideoTranscodeStatusDraft {
+	if count == 0 {
 		return errors.New("只能删除草稿或已经结束的任务")
 	}
-	return core.DBS().Unscoped().Where("id = ?", id).Delete(&models.VideoTranscodeTask{}).Error
+	return nil
 }
 
 func (VideoTranscode) DeleteBatch(request VideoTranscodeIDsRequest) (int64, error) {
 	if len(request.IDs) == 0 {
 		return 0, errors.New("请选择需要移除的任务")
 	}
-	result := core.DBS().Unscoped().
-		Where("id IN ? AND status IN ?", request.IDs, []string{
-			models.VideoTranscodeStatusDraft,
-			models.VideoTranscodeStatusSuccess,
-			models.VideoTranscodeStatusFailed,
-			models.VideoTranscodeStatusCancelled,
-			models.VideoTranscodeStatusInterrupted,
-			models.VideoTranscodeStatusRollbackFailed,
-		}).
-		Delete(&models.VideoTranscodeTask{})
-	return result.RowsAffected, result.Error
+	db := core.DBS()
+	statuses := []string{
+		models.VideoTranscodeStatusDraft,
+		models.VideoTranscodeStatusSuccess,
+		models.VideoTranscodeStatusFailed,
+		models.VideoTranscodeStatusCancelled,
+		models.VideoTranscodeStatusInterrupted,
+		models.VideoTranscodeStatusRollbackFailed,
+	}
+	var count int64
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var deleteErr error
+		count, deleteErr = deleteVideoTranscodeTasksWithCleanup(
+			tx,
+			tx.Where("id IN ? AND status IN ?", request.IDs, statuses),
+			statuses,
+		)
+		return deleteErr
+	})
+	return count, err
 }
 
 func isVideoTranscodeTerminal(status string) bool {
@@ -800,6 +1721,17 @@ func isVideoTranscodeTerminal(status string) bool {
 func validateVideoTranscodeConfig(config VideoTranscodeConfig) error {
 	if config.Container != "mp4" && config.Container != "mkv" {
 		return errors.New("输出容器只支持 mp4 或 mkv")
+	}
+	if config.OutputMode != "replace" && config.OutputMode != "new_file" {
+		return errors.New("输出方式只支持替换源文件或保存为新文件")
+	}
+	if config.OutputMode == "replace" && config.OutputFileName != "" {
+		return errors.New("替换源文件模式不能设置新文件名")
+	}
+	if config.OutputMode == "new_file" {
+		if err := validateVideoTranscodeOutputFileName(config.OutputFileName); err != nil {
+			return err
+		}
 	}
 	if config.VideoCodec != "copy" && config.VideoCodec != "h264" && config.VideoCodec != "h265" {
 		return errors.New("视频编码只支持 copy、h264 或 h265")
@@ -838,10 +1770,40 @@ func validateVideoTranscodeConfig(config VideoTranscodeConfig) error {
 	return nil
 }
 
+func validateVideoTranscodeOutputFileName(name string) error {
+	if name == "" {
+		return nil
+	}
+	if len([]byte(name)) > 180 || name == "." || name == ".." ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") ||
+		strings.ContainsAny(name, `<>:"/\|?*`) {
+		return errors.New("新文件名无效，请勿包含路径或系统保留字符")
+	}
+	for _, char := range name {
+		if char < 32 {
+			return errors.New("新文件名不能包含控制字符")
+		}
+	}
+	reservedBase := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	reserved := map[string]struct{}{
+		"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
+		"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {}, "COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
+		"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {}, "LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+	}
+	if _, exists := reserved[reservedBase]; exists {
+		return errors.New("新文件名是系统保留名称，请更换名称")
+	}
+	return nil
+}
+
 func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTask) {
 	config := DefaultVideoTranscodeConfig()
 	if err := json.Unmarshal([]byte(task.ConfigJsonData), &config); err != nil {
 		setVideoTranscodeFailure(task.ID, fmt.Errorf("解析转码参数失败: %w", err))
+		return
+	}
+	if err := validateVideoTranscodeConfig(config); err != nil {
+		setVideoTranscodeFailure(task.ID, fmt.Errorf("转码参数无效: %w", err))
 		return
 	}
 
@@ -875,14 +1837,45 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 		setVideoTranscodeFailure(task.ID, errors.New("源文件不包含有效视频流"))
 		return
 	}
+	editPlan := VideoEditPlan{Version: 1}
+	expectedDuration := duration
+	hasEdits := task.EditPlanJsonData != ""
+	if hasEdits {
+		if err := json.Unmarshal([]byte(task.EditPlanJsonData), &editPlan); err != nil {
+			setVideoTranscodeFailure(task.ID, fmt.Errorf("解析剪辑方案失败: %w", err))
+			return
+		}
+		var normalizeErr error
+		editPlan, expectedDuration, hasEdits, normalizeErr = normalizeVideoEditPlan(editPlan, duration)
+		if normalizeErr != nil {
+			setVideoTranscodeFailure(task.ID, fmt.Errorf("剪辑方案无效: %w", normalizeErr))
+			return
+		}
+		if hasEdits && (config.VideoCodec == "copy" || config.AudioCodec == "copy") {
+			setVideoTranscodeFailure(task.ID, errors.New("剪辑任务不能复制音视频流，请选择 H.264/H.265 和 AAC"))
+			return
+		}
+		if hasEdits && countVideoTranscodeStreams(sourceInfo, "subtitle") > 0 {
+			setVideoTranscodeFailure(task.ID, errors.New("第一版视频剪辑暂不支持包含字幕轨的源文件"))
+			return
+		}
+	}
 	if err := validateVideoTranscodeSourceCompatibility(sourceInfo, config); err != nil {
 		setVideoTranscodeFailure(task.ID, err)
 		return
 	}
 	sourceBasic := (processorsffmpeg.VideoInfo{}).GetVideoBasicInfoByVideoFormatInfo(sourceInfo)
 	sourceVideoBitRate, _ := strconv.ParseInt(sourceBasic.BitRate, 10, 64)
+	storedEditedDuration := 0.0
+	if hasEdits {
+		storedEditedDuration = expectedDuration
+	}
 
-	tempPath, outputPath, backupPath := videoTranscodePaths(task, config)
+	tempPath, outputPath, backupPath, err := videoTranscodePaths(task, config)
+	if err != nil {
+		setVideoTranscodeFailure(task.ID, err)
+		return
+	}
 	if filepath.Clean(outputPath) != filepath.Clean(current.Src) {
 		if _, err := os.Stat(outputPath); err == nil {
 			setVideoTranscodeFailure(task.ID, fmt.Errorf("输出文件已经存在: %s", outputPath))
@@ -901,6 +1894,7 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 		"source_video_codec":    sourceBasic.VideoCodec,
 		"source_audio_codec":    sourceBasic.AudioCodec,
 		"source_video_bit_rate": sourceVideoBitRate,
+		"edited_duration":       storedEditedDuration,
 	})
 	if runStateResult.Error != nil || runStateResult.RowsAffected != 1 {
 		setVideoTranscodeFailure(task.ID, fmt.Errorf(
@@ -911,7 +1905,10 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 	}
 
 	_ = os.Remove(tempPath)
-	if err := runVideoTranscodeFFmpeg(ctx, task.ID, current.Src, tempPath, duration, primaryVideo.Index, config); err != nil {
+	if err := runVideoTranscodeFFmpeg(
+		ctx, task.ID, current.Src, tempPath, expectedDuration,
+		primaryVideo.Index, sourceInfo, config, editPlan, hasEdits,
+	); err != nil {
 		_ = os.Remove(tempPath)
 		if errors.Is(err, context.Canceled) {
 			setVideoTranscodeCancelled(task.ID)
@@ -930,25 +1927,16 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 		))
 		return
 	}
-	outputInfo, outputStat, err := verifyVideoTranscodeOutput(tempPath, duration, sourceInfo, config)
+	outputInfo, outputStat, err := verifyVideoTranscodeOutputWithTimeout(
+		ctx, videoTranscodeVerificationTimeout,
+		tempPath, expectedDuration, sourceInfo, config, hasEdits,
+	)
 	if err != nil {
 		_ = os.Remove(tempPath)
 		setVideoTranscodeFailure(task.ID, err)
 		return
 	}
-	outputBasic := (processorsffmpeg.VideoInfo{}).GetVideoBasicInfoByVideoFormatInfo(outputInfo)
-	outputVideoBitRate, _ := strconv.ParseInt(outputBasic.BitRate, 10, 64)
-	if err := core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", task.ID).
-		Updates(map[string]interface{}{
-			"output_size":           outputStat.Size(),
-			"output_duration":       (processorsffmpeg.VideoInfo{}).GetVideoDuration(outputInfo),
-			"output_width":          outputBasic.Width,
-			"output_height":         outputBasic.Height,
-			"output_frame_rate":     outputBasic.FrameRate,
-			"output_video_codec":    outputBasic.VideoCodec,
-			"output_audio_codec":    outputBasic.AudioCodec,
-			"output_video_bit_rate": outputVideoBitRate,
-		}).Error; err != nil {
+	if err := saveVideoTranscodeOutputInfo(task.ID, outputInfo, outputStat); err != nil {
 		_ = os.Remove(tempPath)
 		setVideoTranscodeFailure(task.ID, fmt.Errorf("保存转码输出信息失败: %w", err))
 		return
@@ -958,7 +1946,12 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 		setVideoTranscodeCancelled(task.ID)
 		return
 	}
-	if err := replaceVideoTranscodeSource(ctx, task, current, tempPath, outputPath, backupPath, outputInfo, outputStat, config); err != nil {
+	if config.OutputMode == "new_file" {
+		err = saveVideoTranscodeNewOutput(ctx, task, tempPath, outputPath, outputStat)
+	} else {
+		err = replaceVideoTranscodeSource(ctx, task, current, tempPath, outputPath, backupPath, outputInfo, outputStat, config)
+	}
+	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			_ = os.Remove(tempPath)
 			setVideoTranscodeCancelled(task.ID)
@@ -969,7 +1962,27 @@ func (VideoTranscode) execute(ctx context.Context, task *models.VideoTranscodeTa
 	}
 }
 
-func videoTranscodePaths(task *models.VideoTranscodeTask, config VideoTranscodeConfig) (string, string, string) {
+func saveVideoTranscodeOutputInfo(
+	taskID string,
+	outputInfo processorsffmpeg.VideoFormatInfo,
+	outputStat os.FileInfo,
+) error {
+	outputBasic := (processorsffmpeg.VideoInfo{}).GetVideoBasicInfoByVideoFormatInfo(outputInfo)
+	outputVideoBitRate, _ := strconv.ParseInt(outputBasic.BitRate, 10, 64)
+	return core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", taskID).
+		Updates(map[string]interface{}{
+			"output_size":           outputStat.Size(),
+			"output_duration":       (processorsffmpeg.VideoInfo{}).GetVideoDuration(outputInfo),
+			"output_width":          outputBasic.Width,
+			"output_height":         outputBasic.Height,
+			"output_frame_rate":     outputBasic.FrameRate,
+			"output_video_codec":    outputBasic.VideoCodec,
+			"output_audio_codec":    outputBasic.AudioCodec,
+			"output_video_bit_rate": outputVideoBitRate,
+		}).Error
+}
+
+func videoTranscodePaths(task *models.VideoTranscodeTask, config VideoTranscodeConfig) (string, string, string, error) {
 	sourceExt := filepath.Ext(task.SourcePath)
 	base := strings.TrimSuffix(filepath.Base(task.SourcePath), sourceExt)
 	ext := "." + config.Container
@@ -979,9 +1992,42 @@ func videoTranscodePaths(task *models.VideoTranscodeTask, config VideoTranscodeC
 	dir := filepath.Dir(task.SourcePath)
 	runID := core.GenerateUniqueID()
 	output := filepath.Join(dir, base+ext)
+	if config.OutputMode == "new_file" {
+		outputBase := config.OutputFileName
+		if outputBase == "" {
+			outputBase = base + "_转码"
+			if task.EditPlanJsonData != "" {
+				outputBase = base + "_剪辑"
+			}
+		}
+		var err error
+		output, err = nextVideoTranscodeOutputPath(dir, outputBase, ext)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
 	temp := filepath.Join(dir, "."+base+".cmtranscode-"+task.ID+"-"+runID+ext+".part")
-	backup := filepath.Join(dir, "."+filepath.Base(task.SourcePath)+".cmbackup-"+task.ID+"-"+runID)
-	return temp, output, backup
+	backup := ""
+	if config.OutputMode == "replace" {
+		backup = filepath.Join(dir, "."+filepath.Base(task.SourcePath)+".cmbackup-"+task.ID+"-"+runID)
+	}
+	return temp, output, backup, nil
+}
+
+func nextVideoTranscodeOutputPath(dir, outputBase, ext string) (string, error) {
+	for index := 1; index <= 10000; index++ {
+		suffix := ""
+		if index > 1 {
+			suffix = "_" + strconv.Itoa(index)
+		}
+		candidate := filepath.Join(dir, outputBase+suffix+ext)
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("检查新文件输出路径失败: %w", err)
+		}
+	}
+	return "", errors.New("无法生成可用的新文件名称")
 }
 
 func runVideoTranscodeFFmpeg(
@@ -989,16 +2035,30 @@ func runVideoTranscodeFFmpeg(
 	taskID, source, output string,
 	duration float64,
 	primaryVideoIndex int,
+	sourceInfo processorsffmpeg.VideoFormatInfo,
 	config VideoTranscodeConfig,
+	editPlan VideoEditPlan,
+	hasEdits bool,
 ) error {
 	ffmpegPath, err := (processorsffmpeg.FFmpeg{}).IsFFmpegAvailable()
 	if err != nil {
 		return err
 	}
-	args := []string{
-		"-hide_banner", "-loglevel", "warning", "-y", "-i", source,
-		"-map", fmt.Sprintf("0:%d", primaryVideoIndex), "-map", "0:a?", "-map", "0:s?",
-		"-map_metadata", "0", "-map_chapters", "0",
+	args := []string{"-hide_banner", "-loglevel", "warning", "-y", "-i", source}
+	if hasEdits {
+		filterGraph, outputLabels := buildVideoEditFilterGraph(
+			primaryVideoIndex, sourceInfo, editPlan, config,
+		)
+		args = append(args, "-filter_complex", filterGraph)
+		for _, label := range outputLabels {
+			args = append(args, "-map", label)
+		}
+		args = append(args, "-map_metadata", "0", "-map_chapters", "-1")
+	} else {
+		args = append(args,
+			"-map", fmt.Sprintf("0:%d", primaryVideoIndex), "-map", "0:a?", "-map", "0:s?",
+			"-map_metadata", "0", "-map_chapters", "0",
+		)
 	}
 	videoEncoder := ""
 	switch config.VideoCodec {
@@ -1015,7 +2075,7 @@ func runVideoTranscodeFFmpeg(
 		args = appendVideoEncoderQualityArgs(args, config)
 	}
 	if config.VideoCodec != "copy" {
-		if config.ResolutionHeight > 0 {
+		if config.ResolutionHeight > 0 && !hasEdits {
 			args = append(args, "-vf", fmt.Sprintf("scale=-2:min(ih\\,%d)", config.ResolutionHeight))
 		}
 		if config.FrameRate > 0 {
@@ -1085,6 +2145,68 @@ func runVideoTranscodeFFmpeg(
 		return fmt.Errorf("FFmpeg 转码失败: %v\n%s", err, message)
 	}
 	return nil
+}
+
+func buildVideoEditFilterGraph(
+	primaryVideoIndex int,
+	sourceInfo processorsffmpeg.VideoFormatInfo,
+	plan VideoEditPlan,
+	config VideoTranscodeConfig,
+) (string, []string) {
+	filters := make([]string, 0, len(plan.Segments)*3)
+	videoInputs := strings.Builder{}
+	for index, segment := range plan.Segments {
+		label := fmt.Sprintf("v%d", index)
+		filters = append(filters, fmt.Sprintf(
+			"[0:%d]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS[%s]",
+			primaryVideoIndex, segment.Start, segment.End, label,
+		))
+		videoInputs.WriteString("[")
+		videoInputs.WriteString(label)
+		videoInputs.WriteString("]")
+	}
+	videoOutputLabel := "vout"
+	if config.ResolutionHeight > 0 {
+		filters = append(filters, fmt.Sprintf(
+			"%sconcat=n=%d:v=1:a=0[vjoined]",
+			videoInputs.String(), len(plan.Segments),
+		))
+		filters = append(filters, fmt.Sprintf(
+			"[vjoined]scale=-2:min(ih\\,%d)[%s]",
+			config.ResolutionHeight, videoOutputLabel,
+		))
+	} else {
+		filters = append(filters, fmt.Sprintf(
+			"%sconcat=n=%d:v=1:a=0[%s]",
+			videoInputs.String(), len(plan.Segments), videoOutputLabel,
+		))
+	}
+	outputLabels := []string{"[" + videoOutputLabel + "]"}
+	audioOutputIndex := 0
+	for _, stream := range sourceInfo.Streams {
+		if stream.CodecType != "audio" {
+			continue
+		}
+		audioInputs := strings.Builder{}
+		for segmentIndex, segment := range plan.Segments {
+			label := fmt.Sprintf("a%d_%d", audioOutputIndex, segmentIndex)
+			filters = append(filters, fmt.Sprintf(
+				"[0:%d]atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS[%s]",
+				stream.Index, segment.Start, segment.End, label,
+			))
+			audioInputs.WriteString("[")
+			audioInputs.WriteString(label)
+			audioInputs.WriteString("]")
+		}
+		outputLabel := fmt.Sprintf("aout%d", audioOutputIndex)
+		filters = append(filters, fmt.Sprintf(
+			"%sconcat=n=%d:v=0:a=1[%s]",
+			audioInputs.String(), len(plan.Segments), outputLabel,
+		))
+		outputLabels = append(outputLabels, "["+outputLabel+"]")
+		audioOutputIndex++
+	}
+	return strings.Join(filters, ";"), outputLabels
 }
 
 func hardwareVideoEncoder(codec, gpuEncoder, fallback string) string {
@@ -1192,6 +2314,7 @@ func verifyVideoTranscodeOutput(
 	sourceDuration float64,
 	sourceInfo processorsffmpeg.VideoFormatInfo,
 	config VideoTranscodeConfig,
+	hasEdits bool,
 ) (processorsffmpeg.VideoFormatInfo, os.FileInfo, error) {
 	stat, err := os.Stat(path)
 	if err != nil {
@@ -1204,16 +2327,54 @@ func verifyVideoTranscodeOutput(
 	if err != nil {
 		return info, nil, fmt.Errorf("转码输出无法通过 FFprobe 校验: %w", err)
 	}
-	if err := validateVideoTranscodeOutputInfo(sourceInfo, info, sourceDuration, config); err != nil {
+	if err := validateVideoTranscodeOutputInfo(sourceInfo, info, sourceDuration, config, hasEdits); err != nil {
 		return info, nil, err
 	}
 	return info, stat, nil
+}
+
+func verifyVideoTranscodeOutputWithTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+	path string,
+	sourceDuration float64,
+	sourceInfo processorsffmpeg.VideoFormatInfo,
+	config VideoTranscodeConfig,
+	hasEdits bool,
+) (processorsffmpeg.VideoFormatInfo, os.FileInfo, error) {
+	result := waitVideoTranscodeVerification(ctx, timeout, func() videoTranscodeVerifyResult {
+		info, stat, err := verifyVideoTranscodeOutput(path, sourceDuration, sourceInfo, config, hasEdits)
+		return videoTranscodeVerifyResult{Info: info, Stat: stat, Err: err}
+	})
+	return result.Info, result.Stat, result.Err
+}
+
+func waitVideoTranscodeVerification(
+	ctx context.Context,
+	timeout time.Duration,
+	verify func() videoTranscodeVerifyResult,
+) videoTranscodeVerifyResult {
+	resultChannel := make(chan videoTranscodeVerifyResult, 1)
+	go func() { resultChannel <- verify() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-resultChannel:
+		return result
+	case <-ctx.Done():
+		return videoTranscodeVerifyResult{Err: ctx.Err()}
+	case <-timer.C:
+		return videoTranscodeVerifyResult{Err: fmt.Errorf(
+			"校验转码输出超过 %s，任务已停止，源文件未替换", timeout,
+		)}
+	}
 }
 
 func validateVideoTranscodeOutputInfo(
 	sourceInfo, outputInfo processorsffmpeg.VideoFormatInfo,
 	sourceDuration float64,
 	config VideoTranscodeConfig,
+	hasEdits bool,
 ) error {
 	video := (processorsffmpeg.VideoInfo{}).PrimaryVideoStream(outputInfo)
 	if video == nil {
@@ -1252,7 +2413,11 @@ func validateVideoTranscodeOutputInfo(
 			}
 		}
 	}
-	if countVideoTranscodeStreams(sourceInfo, "subtitle") != countVideoTranscodeStreams(outputInfo, "subtitle") {
+	if hasEdits {
+		if countVideoTranscodeStreams(outputInfo, "subtitle") != 0 {
+			return errors.New("剪辑输出包含了非预期的字幕轨")
+		}
+	} else if countVideoTranscodeStreams(sourceInfo, "subtitle") != countVideoTranscodeStreams(outputInfo, "subtitle") {
 		return errors.New("输出字幕轨数量与源文件不一致，已拒绝替换源文件")
 	}
 	if config.Container == "mp4" {
@@ -1279,6 +2444,98 @@ func validateVideoTranscodeOutputInfo(
 	return nil
 }
 
+func saveVideoTranscodeNewOutput(
+	ctx context.Context,
+	task *models.VideoTranscodeTask,
+	tempPath, outputPath string,
+	outputStat os.FileInfo,
+) error {
+	lock := mediaPathLocks.get(outputPath)
+	lock.Lock()
+	defer lock.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	stateResult := core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", task.ID).
+		Update("status", models.VideoTranscodeStatusSavingOutput)
+	if stateResult.Error != nil || stateResult.RowsAffected != 1 {
+		return fmt.Errorf("保存新文件状态失败: %w", videoTranscodeUpdateError(stateResult))
+	}
+	if err := publishVideoTranscodeOutput(tempPath, outputPath); err != nil {
+		return fmt.Errorf("保存转码结果为新文件失败: %w", err)
+	}
+	finalStat, err := os.Stat(outputPath)
+	if err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+	if outputStat != nil && finalStat.Size() != outputStat.Size() {
+		_ = os.Remove(outputPath)
+		return errors.New("另存的新文件大小与校验结果不一致")
+	}
+	if err := completeVideoTranscodeNewOutput(task.ID, finalStat.Size(), ""); err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+	if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		warning := "新文件已保存，但转码临时文件清理失败: " + err.Error()
+		_ = core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", task.ID).
+			Update("warning_message", warning).Error
+	}
+	processorscache.CacheVideoInfoLastUse{}.Invalidate(outputPath)
+	return nil
+}
+
+func publishVideoTranscodeOutput(tempPath, outputPath string) error {
+	if err := os.Link(tempPath, outputPath); err == nil {
+		return nil
+	}
+	source, err := os.Open(tempPath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	target, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	succeeded := false
+	defer func() {
+		_ = target.Close()
+		if !succeeded {
+			_ = os.Remove(outputPath)
+		}
+	}()
+	if _, err := io.Copy(target, source); err != nil {
+		return err
+	}
+	if err := target.Sync(); err != nil {
+		return err
+	}
+	if err := target.Close(); err != nil {
+		return err
+	}
+	succeeded = true
+	return nil
+}
+
+func completeVideoTranscodeNewOutput(taskID string, outputSize int64, warning string) error {
+	finished := datatype.CustomTime(core.TimeNow())
+	result := core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", taskID).Updates(map[string]interface{}{
+		"status":          models.VideoTranscodeStatusSuccess,
+		"progress":        100,
+		"output_size":     outputSize,
+		"backup_path":     "",
+		"warning_message": warning,
+		"error_message":   "",
+		"finished_at":     &finished,
+	})
+	if result.Error != nil || result.RowsAffected != 1 {
+		return videoTranscodeUpdateError(result)
+	}
+	return nil
+}
+
 func replaceVideoTranscodeSource(
 	ctx context.Context,
 	task *models.VideoTranscodeTask,
@@ -1288,20 +2545,25 @@ func replaceVideoTranscodeSource(
 	outputStat os.FileInfo,
 	config VideoTranscodeConfig,
 ) error {
-	lock := mediaPathLocks.get(current.Src)
-	lock.Lock()
-	defer lock.Unlock()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
 	replaceStateResult := core.DBS().Model(&models.VideoTranscodeTask{}).Where("id = ?", task.ID).
 		Update("status", models.VideoTranscodeStatusReplacing)
 	if replaceStateResult.Error != nil || replaceStateResult.RowsAffected != 1 {
 		return fmt.Errorf("保存文件替换状态失败: %w", videoTranscodeUpdateError(replaceStateResult))
 	}
+	// 编辑器或其它页面可能仍保持源视频的 Range/HLS 请求。先让这些请求结束，
+	// 它们会关闭文件句柄并释放读锁，然后替换流程才能安全取得写锁。
+	unblockMediaReads := blockMediaReads(current.Src)
+	defer unblockMediaReads()
 	processorscache.CacheVideoInfoLastUse{}.Invalidate(current.Src)
 	_ = (processorscache.CacheFileLastUse{}).Invalidate(current.Src)
+	unlockMedia, err := lockMediaForReplacementWithRetry(ctx, current.Src)
+	if err != nil {
+		return fmt.Errorf("释放源视频读取句柄失败: %w", err)
+	}
+	defer unlockMedia()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if _, err := os.Stat(backupPath); err == nil {
 		return fmt.Errorf("备份路径已经存在，已拒绝覆盖: %s", backupPath)
 	}

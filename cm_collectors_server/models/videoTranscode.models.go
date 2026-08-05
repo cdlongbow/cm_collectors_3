@@ -12,6 +12,8 @@ const (
 	VideoTranscodeStatusProbing            = "probing"
 	VideoTranscodeStatusTranscoding        = "transcoding"
 	VideoTranscodeStatusVerifying          = "verifying"
+	VideoTranscodeStatusRetryingReplace    = "retrying_replace"
+	VideoTranscodeStatusSavingOutput       = "saving_output"
 	VideoTranscodeStatusReplacing          = "replacing"
 	VideoTranscodeStatusRefreshingMetadata = "refreshing_metadata"
 	VideoTranscodeStatusSuccess            = "success"
@@ -39,6 +41,8 @@ type VideoTranscodeTask struct {
 	SourceAudioCodec   string               `json:"sourceAudioCodec" gorm:"column:source_audio_codec;type:varchar(50)"`
 	SourceVideoBitRate int64                `json:"sourceVideoBitRate" gorm:"column:source_video_bit_rate;type:bigint;default:0"`
 	ConfigJsonData     string               `json:"configJsonData" gorm:"column:config_json_data;type:text"`
+	EditPlanJsonData   string               `json:"editPlanJsonData" gorm:"column:edit_plan_json_data;type:text"`
+	EditedDuration     float64              `json:"editedDuration" gorm:"column:edited_duration;type:real;default:0"`
 	Status             string               `json:"status" gorm:"type:varchar(30);index:idx_video_transcode_status_created,priority:1;index:idx_video_transcode_drama_status,priority:2"`
 	Progress           float64              `json:"progress" gorm:"type:real;default:0"`
 	ProcessedSeconds   float64              `json:"processedSeconds" gorm:"column:processed_seconds;type:real;default:0"`
@@ -101,6 +105,8 @@ func (VideoTranscodeTask) HasActiveByDramaSeriesID(db *gorm.DB, dramaSeriesID st
 			VideoTranscodeStatusProbing,
 			VideoTranscodeStatusTranscoding,
 			VideoTranscodeStatusVerifying,
+			VideoTranscodeStatusRetryingReplace,
+			VideoTranscodeStatusSavingOutput,
 			VideoTranscodeStatusReplacing,
 			VideoTranscodeStatusRefreshingMetadata,
 		}).Count(&count).Error

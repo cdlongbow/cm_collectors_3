@@ -8,6 +8,7 @@ import (
 	processorsFFmpeg "cm_collectors_server/processorsFFmpeg"
 	"cm_collectors_server/utils"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -19,6 +20,7 @@ type Play struct{}
 type PlayVideoInfo struct {
 	VideoBasicInfo processorsFFmpeg.VideoBasicInfo `json:"video_basic_info"`
 	IsWeb          bool                            `json:"is_web"`
+	MediaVersion   string                          `json:"media_version"`
 }
 
 // AllowServerOpenFile 检测是否允许服务器打开文件
@@ -38,6 +40,10 @@ func (p Play) PlayVideoInfo(dramaSeriesId string) (*PlayVideoInfo, error) {
 	if !utils.FileExists(playSrc) {
 		return nil, errorMessage.Err_Resources_Play_Src_Error
 	}
+	fileInfo, err := os.Stat(playSrc)
+	if err != nil {
+		return nil, err
+	}
 	if err := (VideoMetadata{}).EnsureForPlay(*dramaSeries); err != nil {
 		// 元数据补齐失败不应改变原有播放行为；下面仍尝试读取播放所需信息。
 		core.LogErr(err)
@@ -52,7 +58,8 @@ func (p Play) PlayVideoInfo(dramaSeriesId string) (*PlayVideoInfo, error) {
 	}
 	isWeb := pf_videoInfo.IsWebCompatible(videoFormatInfo)
 	videoBasicInfo := pf_videoInfo.GetVideoBasicInfoByVideoFormatInfo(videoFormatInfo)
-	return &PlayVideoInfo{VideoBasicInfo: videoBasicInfo, IsWeb: isWeb}, nil
+	mediaVersion := fmt.Sprintf("%d-%d", fileInfo.Size(), fileInfo.ModTime().UnixMilli())
+	return &PlayVideoInfo{VideoBasicInfo: videoBasicInfo, IsWeb: isWeb, MediaVersion: mediaVersion}, nil
 }
 
 func (p Play) PlayUpdate(resourceId, dramaSeriesId string) error {

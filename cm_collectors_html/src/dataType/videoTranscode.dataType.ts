@@ -4,6 +4,8 @@ export type VideoTranscodeStatus =
   | 'probing'
   | 'transcoding'
   | 'verifying'
+  | 'retrying_replace'
+  | 'saving_output'
   | 'replacing'
   | 'refreshing_metadata'
   | 'success'
@@ -14,6 +16,8 @@ export type VideoTranscodeStatus =
 
 export interface I_videoTranscodeConfig {
   container: 'mp4' | 'mkv';
+  outputMode: 'replace' | 'new_file';
+  outputFileName: string;
   videoCodec: 'copy' | 'h264' | 'h265';
   qualityMode: 'crf' | 'bitrate';
   crf: number;
@@ -26,6 +30,25 @@ export interface I_videoTranscodeConfig {
   threads: number;
   keepBackup: boolean;
   gpuEncoder: '' | 'nvenc' | 'qsv' | 'amf';
+}
+
+export interface I_videoEditSegment {
+  id: string;
+  start: number;
+  end: number;
+}
+
+export interface I_videoEditPlan {
+  version: 1;
+  segments: I_videoEditSegment[];
+}
+
+export interface I_videoTranscodeEditPlanResult {
+  plan: I_videoEditPlan;
+  editedDuration: number;
+  hasEdits: boolean;
+  config: I_videoTranscodeConfig;
+  configAdjusted: boolean;
 }
 
 export interface I_videoTranscodeTask {
@@ -43,6 +66,8 @@ export interface I_videoTranscodeTask {
   sourceVideoCodec: string;
   sourceAudioCodec: string;
   sourceVideoBitRate: number;
+  editPlanJsonData: string;
+  editedDuration: number;
   status: VideoTranscodeStatus;
   progress: number;
   processedSeconds: number;
@@ -63,9 +88,13 @@ export interface I_videoTranscodeTask {
   createdAt: string;
   startedAt: string;
   finishedAt: string;
+  updatedAt: string;
   config: I_videoTranscodeConfig;
+  editPlan: I_videoEditPlan;
   filesBasesId: string;
   coverPoster: string;
+  canRetryReplacement: boolean;
+  canSaveAsNewFile: boolean;
 }
 
 export interface I_videoTranscodeAddResult {
@@ -77,6 +106,11 @@ export interface I_videoTranscodeAddResult {
 export interface I_videoTranscodeResetResult {
   reset: number;
   skipped: number;
+}
+
+export interface I_videoTranscodeStartResult {
+  queued: number;
+  enabledGpu: number;
 }
 
 export interface I_videoTranscodeQueueStatus {

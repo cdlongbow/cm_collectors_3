@@ -4,7 +4,8 @@
       :class="{
         'fullscreen-mode': isFullscreenMode,
         'actual-fullscreen': isFullscreen,
-        'controls-hidden': isFullscreen && isControlsHidden
+        'controls-hidden': isFullscreen && isControlsHidden,
+        'fit-container': props.fitContainer
       }"
       @mousemove="handlePlayerActivity" @mousedown="handlePlayerActivity">
     <div v-if="isFullscreenMode && !isFullscreen" class="maximized-player-header">
@@ -26,7 +27,7 @@
         <source :src="videoSrc" :type="isHls ? 'application/x-mpegURL' : 'video/mp4'">
       </video>
       <!-- 移动端使用原生播放器 -->
-      <video v-else ref="nativeVideoRef" class="native-video-player" controls preload="auto" width="100%"
+      <video v-else ref="nativeVideoRef" class="native-video-player" :controls="!props.hideControls" preload="auto" width="100%"
         playsinline webkit-playsinline x5-playsinline x5-video-player-type="h5" x5-video-player-fullscreen="true"
         x5-video-orientation="portraint" @play="handleNativePlay" @pause="handleNativePause"
         @ended="handleNativePause" @timeupdate="handleNativeTimeUpdate">
@@ -38,7 +39,7 @@
       </button>
       <div v-if="activeSubtitleText" class="custom-subtitle-display">{{ activeSubtitleText }}</div>
     </div>
-    <videoPlayControls v-if="useVideoPlayControls && !isMobile()" ref="videoControlsRef" @play="handlePlay"
+    <videoPlayControls v-if="useVideoPlayControls && !props.hideControls && !isMobile()" ref="videoControlsRef" @play="handlePlay"
       @pause="handlePause" @seek="handleSeek" @volume-change="handleVolumeChange" @mute-toggle="handleMuteToggle"
       @playback-rate-change="handlePlaybackRateChange" @rotate="handleRotate" @fullscreen="handleFullscreen"
       @picture-in-picture="handlePictureInPicture" @maximize="handleMaximize" @open-in-player="handleOpenInPlayer"
@@ -89,6 +90,14 @@ const props = defineProps({
   aspectRatio: {
     type: String,
     default: '16:9',
+  },
+  fitContainer: {
+    type: Boolean,
+    default: false,
+  },
+  hideControls: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -190,9 +199,10 @@ const videoOptions = (isMobileDevice: boolean) => {
   else {
     return {
       ...baseOptions,
-      controls: !props.useVideoPlayControls, // 桌面端根据props决定是否启用控制条
+      controls: props.hideControls ? false : !props.useVideoPlayControls,
       responsive: true,
-      fluid: true,
+      fluid: !props.fitContainer,
+      fill: props.fitContainer,
       playbackRates: [0.5, 1, 1.5, 2],
       html5: {
         ...baseOptions.html5,
@@ -772,6 +782,11 @@ const normalizeVideoTitle = (title: string, fallbackSrc: string): string => {
   }
 }
 
+const withMediaReloadToken = (src: string, retryCount: number): string => {
+  const separator = src.includes('?') ? '&' : '?'
+  return `${src}${separator}reload=${Date.now()}-${retryCount}`
+}
+
 // 设置视频源
 const setVideoSource = (
   src: string,
@@ -884,7 +899,7 @@ const setVideoSource = (
           console.log('重试加载视频：', retryCount)
           // 添加延迟重试，避免频繁请求
           setTimeout(() => {
-            setVideoSource(src, type, fn, title, retryCount, errorCallback)
+            setVideoSource(withMediaReloadToken(src, retryCount), type, fn, title, retryCount, errorCallback)
           }, 1000)
           return
         }
@@ -976,6 +991,7 @@ const parseWebVtt = (content: string): I_subtitleCue[] => {
 
 // 字幕与视频流独立加载，统一使用自定义覆盖层显示，避免 WebView 文本轨道兼容性差异。
 const addTextTrack = async (src: string, _label: string, _language: string, _isDefault = false) => {
+  void _isDefault
   const loadVersion = ++subtitleLoadVersion
   try {
     const response = await fetch(src)
@@ -1056,6 +1072,35 @@ const resetPlayer = () => {
       rotation.value = 0;
     } catch (e) {
       console.warn('Error resetting player:', e)
+    }
+  }
+}
+
+// 主动卸载媒体源并中止浏览器仍在进行的 Range/HLS 请求。
+// 仅 pause 不会释放 Windows 上由服务端持有的源文件句柄。
+const releaseSource = () => {
+  isPlaybackActive.value = false
+  videoSrc.value = ''
+  videoId.value = ''
+  clearSubtitleCues()
+  if (nativeVideoRef.value) {
+    nativeSourceVersion++
+    nativeSourceCleanup?.()
+    nativeSourceCleanup = undefined
+    nativeVideoRef.value.pause()
+    nativeVideoRef.value.removeAttribute('src')
+    nativeVideoRef.value.querySelectorAll('source').forEach(source => source.remove())
+    void nativeVideoRef.value.load()
+  }
+  if (player.value) {
+    try {
+      player.value.pause()
+      const mediaElement = player.value.el()?.querySelector('video')
+      mediaElement?.removeAttribute('src')
+      mediaElement?.querySelectorAll('source').forEach((source: Element) => source.remove())
+      mediaElement?.load()
+    } catch (error) {
+      console.warn('Failed to release video source:', error)
     }
   }
 }
@@ -1180,6 +1225,7 @@ defineExpose({
   getProgress,
   setCurrentTime,
   resetPlayer,
+  releaseSource,
   setVideoSource,
   setVolume,
   getVolume,
@@ -1430,6 +1476,24 @@ defineExpose({
     /* 保证视频完整显示 */
     object-fit: contain;
   }
+}
+
+/* 固定区域预览：播放器填满可用区域，实际画面始终完整显示。 */
+.video-player-container.fit-container .video-player-windows {
+  overflow: hidden;
+}
+
+.video-player-container.fit-container .video-js,
+.video-player-container.fit-container .native-video-player {
+  width: 100% !important;
+  height: 100% !important;
+  padding: 0 !important;
+}
+
+.video-player-container.fit-container .video-js .vjs-tech,
+.video-player-container.fit-container .native-video-player {
+  object-fit: contain !important;
+  object-position: center center !important;
 }
 
 .native-video-player {

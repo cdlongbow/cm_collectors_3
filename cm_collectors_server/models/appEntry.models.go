@@ -494,6 +494,12 @@ func AutoDatabase(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "video_transcode_edit_plan_v1",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.AutoMigrate(&VideoTranscodeTask{})
+			},
+		},
 	})
 	errMigrate := m.Migrate()
 	if errMigrate != nil {

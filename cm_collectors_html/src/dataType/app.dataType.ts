@@ -173,6 +173,7 @@ export interface I_video_basic_info {
 export interface I_playVideoInfo {
   video_basic_info: I_video_basic_info;
   is_web: boolean;
+  media_version: string;
 }
 export interface I_playVideoData {
   playUrl: string;

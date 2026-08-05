@@ -29,6 +29,8 @@ func TestVideoTranscodeMigrationContainsMediaSnapshotColumns(t *testing.T) {
 		"output_duration",
 		"output_video_codec",
 		"processed_seconds",
+		"edit_plan_json_data",
+		"edited_duration",
 	} {
 		if !db.Migrator().HasColumn(&VideoTranscodeTask{}, column) {
 			t.Fatalf("migration did not create column %s", column)

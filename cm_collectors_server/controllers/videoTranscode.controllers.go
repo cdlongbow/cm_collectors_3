@@ -3,6 +3,8 @@ package controllers
 import (
 	"cm_collectors_server/processors"
 	"cm_collectors_server/response"
+	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,15 +46,42 @@ func (VideoTranscode) UpdateConfig(c *gin.Context) {
 	response.OkWithData(true, c)
 }
 
-func (VideoTranscode) Start(c *gin.Context) {
-	var request processors.VideoTranscodeIDsRequest
+func (VideoTranscode) SaveEditPlan(c *gin.Context) {
+	var request processors.VideoTranscodeEditPlanRequest
 	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
 		return
 	}
-	if err := (processors.VideoTranscode{}).Start(request); ResError(c, err) != nil {
+	result, err := (processors.VideoTranscode{}).SaveEditPlan(c.Param("id"), request)
+	if err := ResError(c, err); err != nil {
 		return
 	}
-	response.OkWithData(true, c)
+	response.OkWithData(result, c)
+}
+
+func (VideoTranscode) Thumbnail(c *gin.Context) {
+	at, err := strconv.ParseFloat(c.Query("at"), 64)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "缩略图时间点无效"})
+		return
+	}
+	data, err := (processors.VideoTranscode{}).Thumbnail(c.Request.Context(), c.Param("id"), at)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=3600")
+	c.Data(http.StatusOK, "image/jpeg", data)
+}
+
+func (VideoTranscode) Start(c *gin.Context) {
+	var request processors.VideoTranscodeStartRequest
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	result, err := (processors.VideoTranscode{}).Start(request)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(result, c)
 }
 
 func (VideoTranscode) ResetBatch(c *gin.Context) {
@@ -65,6 +94,20 @@ func (VideoTranscode) ResetBatch(c *gin.Context) {
 		return
 	}
 	response.OkWithData(result, c)
+}
+
+func (VideoTranscode) RetryReplacement(c *gin.Context) {
+	if err := (processors.VideoTranscode{}).RetryReplacement(c.Param("id")); ResError(c, err) != nil {
+		return
+	}
+	response.OkWithData(true, c)
+}
+
+func (VideoTranscode) SaveVerifiedOutputAsNewFile(c *gin.Context) {
+	if err := (processors.VideoTranscode{}).SaveVerifiedOutputAsNewFile(c.Param("id")); ResError(c, err) != nil {
+		return
+	}
+	response.OkWithData(true, c)
 }
 
 func (VideoTranscode) Pause(c *gin.Context) {

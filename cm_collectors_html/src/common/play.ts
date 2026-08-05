@@ -125,16 +125,22 @@ export const getPlayVideoURLAndType = async (dramaSeriesId: string): Promise<I_p
     playType = 'm3u8';
   }
   return {
-    playUrl: getPlayVideoURL(dramaSeriesId, playType),
+    playUrl: getPlayVideoURL(dramaSeriesId, playType, 'v', result.data.media_version),
     playType: playType,
   }
 }
 
-export const getPlayVideoURL = (dramaSeriesId: string, type: T_VideoPlayMode = 'mp4', fileName: string = 'v') => {
+export const getPlayVideoURL = (
+  dramaSeriesId: string,
+  type: T_VideoPlayMode = 'mp4',
+  fileName: string = 'v',
+  mediaVersion: string = '',
+) => {
+  const versionQuery = mediaVersion ? `?mediaVersion=${encodeURIComponent(mediaVersion)}` : '';
   if (type == 'mp4') {
-    return `/api/video/mp4/${dramaSeriesId}/${fileName}.mp4`;
+    return `/api/video/mp4/${dramaSeriesId}/${fileName}.mp4${versionQuery}`;
   } else {
-    return `/api/video/m3u8/${dramaSeriesId}/${fileName}.m3u8`;
+    return `/api/video/m3u8/${dramaSeriesId}/${fileName}.m3u8${versionQuery}`;
   }
 }
 

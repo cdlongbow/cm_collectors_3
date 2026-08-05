@@ -25,6 +25,13 @@ func (v Video) VideoMP4Stream(c *gin.Context, dramaSeriesId string, needEncoding
 	if err != nil {
 		return err
 	}
+	readContext, releaseMediaRead := registerMediaRead(src, c.Request.Context())
+	c.Request = c.Request.WithContext(readContext)
+	defer releaseMediaRead()
+	if readContext.Err() != nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "Video is being replaced"})
+		return nil
+	}
 	unlockMedia := lockMediaForRead(src)
 	defer unlockMedia()
 	// 检查文件是否存在
@@ -318,6 +325,13 @@ func (v Video) VideoM3u8StreamHLS(c *gin.Context, dramaSeriesId string, start, d
 	if err != nil {
 		return err
 	}
+	readContext, releaseMediaRead := registerMediaRead(dramaSeries.Src, c.Request.Context())
+	c.Request = c.Request.WithContext(readContext)
+	defer releaseMediaRead()
+	if readContext.Err() != nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "Video is being replaced"})
+		return nil
+	}
 	unlockMedia := lockMediaForRead(dramaSeries.Src)
 	defer unlockMedia()
 
@@ -337,7 +351,9 @@ func (v Video) VideoM3u8StreamHLS(c *gin.Context, dramaSeriesId string, start, d
 		return fmt.Errorf("无法获取视频信息: %v", err)
 	}
 
-	cmd, err := processorsffmpeg.M3U8{}.PlayVideoM3u8(dramaSeries.Src, start, duration, false, true)
+	cmd, err := processorsffmpeg.M3U8{}.PlayVideoM3u8Context(
+		c.Request.Context(), dramaSeries.Src, start, duration, false, true,
+	)
 	if err != nil {
 		diagnosticInfo := sanitizedMediaInfo(formatInfo)
 		writePlaybackDiagnosticRateLimited(playbackDiagnosticRecord{

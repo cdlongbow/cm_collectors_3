@@ -81,6 +81,14 @@
           <el-progress :percentage="Math.round(row.progress || 0)" :status="progressStatus(row.status)" />
           <div class="applied-config">
             <el-tag
+              v-if="row.editPlan?.segments?.length"
+              size="small"
+              type="warning"
+              effect="plain"
+            >
+              剪辑：{{ row.editPlan.segments.length }} 段 / {{ formatDuration(row.editedDuration) }}
+            </el-tag>
+            <el-tag
               v-for="item in appliedConfigItems(row.config)"
               :key="item"
               size="small"
@@ -102,8 +110,9 @@
           <div class="output-file" :title="row.outputPath">
             {{ row.outputPath ? fileName(row.outputPath) : `等待生成 .${row.config.container}` }}
           </div>
-          <div v-if="row.outputSize" class="source-details">
-            <span>{{ formatSize(row.outputSize) }}</span>
+          <div v-if="row.outputSize || row.startedAt" class="source-details">
+            <span v-if="row.outputSize">{{ formatSize(row.outputSize) }}</span>
+            <span v-if="row.startedAt" class="source-chip">耗时 {{ formatTaskElapsed(row) }}</span>
             <span
               v-for="item in outputInfoItems(row)"
               :key="item"
@@ -112,20 +121,44 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="135" fixed="right">
+      <el-table-column label="操作" width="290" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button
-            v-if="canCancel(row.status)"
-            type="warning"
-            link
-            @click="cancelTask(row)"
-          >取消</el-button>
-          <el-button
-            v-if="canDelete(row.status)"
-            type="danger"
-            link
-            @click="deleteTask(row)"
-          >移除</el-button>
+          <div class="row-actions">
+            <el-button
+              v-if="row.status === 'draft'"
+              class="row-action edit-action"
+              :icon="EditPen"
+              size="small"
+              @click="openEditor(row)"
+            >剪辑</el-button>
+            <el-button
+              v-if="canCancel(row.status)"
+              class="row-action cancel-action"
+              :icon="CircleClose"
+              size="small"
+              @click="cancelTask(row)"
+            >取消</el-button>
+            <el-button
+              v-if="row.canRetryReplacement"
+              class="row-action edit-action"
+              :icon="RefreshLeft"
+              size="small"
+              @click="retryReplacement(row)"
+            >重试替换</el-button>
+            <el-button
+              v-if="row.canSaveAsNewFile"
+              class="row-action edit-action"
+              size="small"
+              @click="saveVerifiedOutputAsNewFile(row)"
+            >保存为新文件</el-button>
+            <el-button
+              v-if="canDelete(row.status)"
+              class="row-action delete-action"
+              :icon="Delete"
+              size="small"
+              @click="deleteTask(row)"
+            >移除</el-button>
+          </div>
         </template>
       </el-table-column>
       <template #empty>
@@ -273,13 +306,20 @@
         :closable="false"
       />
     </el-card>
+    <videoTranscodeEditor
+      v-if="editingTask"
+      v-model="editorVisible"
+      :task="editingTask"
+      @saved="handleEditPlanSaved"
+      @closed="editingTask = undefined"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, ElNotification, type TableInstance } from 'element-plus';
-import { ArrowDown, ArrowUp, Refresh, RefreshLeft } from '@element-plus/icons-vue';
+import { ArrowDown, ArrowUp, CircleClose, Delete, EditPen, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import type {
   I_videoTranscodeConfig,
   I_videoTranscodeGPUEncoder,
@@ -288,9 +328,12 @@ import type {
   VideoTranscodeStatus,
 } from '@/dataType/videoTranscode.dataType';
 import { videoTranscodeServer } from '@/server/videoTranscode.server';
+import videoTranscodeEditor from './videoTranscodeEditor.vue';
 
 const defaultConfig = (): I_videoTranscodeConfig => ({
   container: 'mp4',
+  outputMode: 'new_file',
+  outputFileName: '',
   videoCodec: 'copy',
   qualityMode: 'crf',
   crf: 23,
@@ -304,14 +347,22 @@ const defaultConfig = (): I_videoTranscodeConfig => ({
   keepBackup: false,
   gpuEncoder: '',
 });
-const configStorageKey = 'cm-video-transcode-config-v2';
+const configStorageKey = 'cm-video-transcode-config-v3';
+const legacyConfigStorageKey = 'cm-video-transcode-config-v2';
 const loadStoredConfig = (): I_videoTranscodeConfig => {
   const defaults = defaultConfig();
   try {
     const stored = window.localStorage.getItem(configStorageKey);
-    if (!stored) return defaults;
-    const parsed = JSON.parse(stored);
-    return parsed && typeof parsed === 'object' ? { ...defaults, ...parsed } : defaults;
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return parsed && typeof parsed === 'object' ? { ...defaults, ...parsed } : defaults;
+    }
+    const legacyStored = window.localStorage.getItem(legacyConfigStorageKey);
+    if (!legacyStored) return defaults;
+    const legacy = JSON.parse(legacyStored);
+    return legacy && typeof legacy === 'object'
+      ? { ...defaults, ...legacy, outputMode: 'new_file', outputFileName: '' }
+      : defaults;
   } catch {
     return defaults;
   }
@@ -357,9 +408,13 @@ const config = reactive<I_videoTranscodeConfig>(loadStoredConfig());
 const advancedExpanded = ref(false);
 const queueStatus = reactive<I_videoTranscodeQueueStatus>({ paused: false, currentId: '' });
 const gpuEncoders = ref<I_videoTranscodeGPUEncoder[]>([]);
+const editorVisible = ref(false);
+const editingTask = ref<I_videoTranscodeTask>();
 let timer: number | undefined;
+let elapsedTimer: number | undefined;
 let mounted = false;
 let refreshing = false;
+const nowMs = ref(Date.now());
 
 const editableTasks = computed(() => tasks.value.filter(item => item.status === 'draft'));
 const startableTasks = computed(() => tasks.value.filter(item =>
@@ -385,8 +440,16 @@ const useGPU = computed({
 });
 
 const activeStatuses: VideoTranscodeStatus[] = [
-  'queued', 'probing', 'transcoding', 'verifying', 'replacing', 'refreshing_metadata',
+  'queued', 'probing', 'transcoding', 'verifying', 'retrying_replace', 'saving_output', 'replacing', 'refreshing_metadata',
 ];
+const updateElapsedClock = () => {
+  window.clearInterval(elapsedTimer);
+  elapsedTimer = undefined;
+  nowMs.value = Date.now();
+  if (tasks.value.some(item => item.startedAt && activeStatuses.includes(item.status))) {
+    elapsedTimer = window.setInterval(() => { nowMs.value = Date.now(); }, 1000);
+  }
+};
 const scheduleRefresh = () => {
   if (!mounted) return;
   window.clearTimeout(timer);
@@ -402,7 +465,10 @@ const refresh = async (showLoading = true) => {
       videoTranscodeServer.list(),
       videoTranscodeServer.status(),
     ]);
-    if (listResult.status) tasks.value = listResult.data;
+    if (listResult.status) {
+      tasks.value = listResult.data;
+      updateElapsedClock();
+    }
     if (statusResult.status) Object.assign(queueStatus, statusResult.data);
   } finally {
     refreshing = false;
@@ -441,14 +507,48 @@ const startTasks = async () => {
   if (selection.value.length && !ids.length) {
     return ElMessage.warning('选中的任务当前都不可执行');
   }
-  await ElMessageBox.confirm(
-    ids.length ? `确定执行选中的 ${ids.length} 个任务吗？` : '确定执行全部可开始任务吗？',
-    '开始转码',
-    { type: 'warning' },
-  );
-  const result = await videoTranscodeServer.start(ids);
+  await loadCapabilities();
+  const targetTasks = selection.value.length ? selectedStartableTasks.value : startableTasks.value;
+  const gpuEligibleTasks = targetTasks.filter((task) => {
+    if (!['h264', 'h265'].includes(task.config.videoCodec)) return false;
+    const compatible = gpuEncoders.value.filter(encoder =>
+      encoder.videoCodecs.includes(task.config.videoCodec as 'h264' | 'h265'));
+    return compatible.length > 0 && !compatible.some(encoder => encoder.id === task.config.gpuEncoder);
+  });
+  let enableGpu = false;
+  if (gpuEligibleTasks.length) {
+    const gpuNames = [...new Set(gpuEncoders.value.map(item => item.label))].join('、');
+    try {
+      await ElMessageBox.confirm(
+        `检测到 ${gpuNames}，本次 ${targetTasks.length} 个任务中有 ${gpuEligibleTasks.length} 个可启用 GPU 编码。是否全部启用后开始？`,
+        '检测到可用 GPU',
+        {
+          type: 'info',
+          confirmButtonText: '全部启用 GPU 并开始',
+          cancelButtonText: '保持当前设置并开始',
+          distinguishCancelAndClose: true,
+          closeOnClickModal: false,
+        },
+      );
+      enableGpu = true;
+    } catch (action) {
+      if (action !== 'cancel') return;
+    }
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        ids.length ? `确定执行选中的 ${ids.length} 个任务吗？` : '确定执行全部可开始任务吗？',
+        '开始转码',
+        { type: 'warning' },
+      );
+    } catch {
+      return;
+    }
+  }
+  const result = await videoTranscodeServer.start(ids, enableGpu);
   if (!result.status) return ElMessage.error(result.msg || '启动失败');
-  ElMessage.success('任务已进入执行队列');
+  const gpuTip = result.data.enabledGpu ? `，已为 ${result.data.enabledGpu} 个任务启用 GPU` : '';
+  ElMessage.success(`${result.data.queued} 个任务已进入执行队列${gpuTip}`);
   await refresh(false);
 };
 
@@ -478,6 +578,30 @@ const cancelTask = async (task: I_videoTranscodeTask) => {
 const deleteTask = async (task: I_videoTranscodeTask) => {
   const result = await videoTranscodeServer.delete(task.id);
   if (!result.status) return ElMessage.error(result.msg || '移除失败');
+  await refresh(false);
+};
+
+const retryReplacement = async (task: I_videoTranscodeTask) => {
+  await ElMessageBox.confirm(
+    '将复用已经校验成功的临时成片，只重试替换源文件，不会重新转码。确定继续吗？',
+    '重试替换源文件',
+    { type: 'warning' },
+  );
+  const result = await videoTranscodeServer.retryReplacement(task.id);
+  if (!result.status) return ElMessage.error(result.msg || '重试替换失败');
+  ElMessage.success('已开始重试替换，将自动暂停该视频的新播放请求');
+  await refresh(false);
+};
+
+const saveVerifiedOutputAsNewFile = async (task: I_videoTranscodeTask) => {
+  await ElMessageBox.confirm(
+    '将复用已经校验成功的临时成片，保留源文件并保存为新文件，不会重新转码。确定继续吗？',
+    '保存为新文件',
+    { type: 'info' },
+  );
+  const result = await videoTranscodeServer.saveVerifiedOutputAsNewFile(task.id);
+  if (!result.status) return ElMessage.error(result.msg || '保存新文件失败');
+  ElMessage.success('正在保存为新文件，源文件不会被修改');
   await refresh(false);
 };
 
@@ -518,6 +642,14 @@ const resetSelectedTasks = async () => {
   await refresh(false);
 };
 
+const openEditor = (task: I_videoTranscodeTask) => {
+  editingTask.value = task;
+  editorVisible.value = true;
+};
+const handleEditPlanSaved = async () => {
+  await refresh(false);
+};
+
 const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() || path;
 const formatSize = (size: number) => {
   if (!size) return '-';
@@ -536,6 +668,24 @@ const formatDuration = (seconds: number) => {
   const minutes = Math.floor((total % 3600) / 60);
   const remaining = total % 60;
   return [hours, minutes, remaining].map(value => String(value).padStart(2, '0')).join(':');
+};
+const parseTaskTime = (value: string) => {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) return parsed;
+  const normalized = Date.parse(value.replace(' ', 'T'));
+  return Number.isFinite(normalized) ? normalized : 0;
+};
+const formatTaskElapsed = (task: I_videoTranscodeTask) => {
+  const started = parseTaskTime(task.startedAt);
+  if (!started) return '-';
+  const finished = parseTaskTime(task.finishedAt);
+  const terminalFallback = activeStatuses.includes(task.status) ? 0 : parseTaskTime(task.updatedAt);
+  const totalSeconds = Math.max(0, Math.floor(((finished || terminalFallback || nowMs.value) - started) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
 };
 const formatCodec = (codec: string) => {
   const normalized = codec.toLowerCase();
@@ -581,6 +731,7 @@ const formatBitrate = (kbps: number) =>
   kbps >= 1024 ? `${Number((kbps / 1024).toFixed(2))} Mbps` : `${kbps} Kbps`;
 const appliedConfigItems = (item: I_videoTranscodeConfig) => {
   const parts = [`输出：${item.container.toUpperCase()}`];
+  if (item.outputMode === 'new_file') parts.push('保存：新文件');
   if (item.videoCodec === 'copy') {
     parts.push('视频：复制');
   } else {
@@ -610,6 +761,8 @@ const statusNames: Record<VideoTranscodeStatus, string> = {
   probing: '分析源文件',
   transcoding: '正在转码',
   verifying: '校验输出',
+  retrying_replace: '重试替换',
+  saving_output: '保存新文件',
   replacing: '替换源文件',
   refreshing_metadata: '刷新元数据',
   success: '已完成',
@@ -622,7 +775,7 @@ const statusText = (status: VideoTranscodeStatus) => statusNames[status] || stat
 const statusType = (status: VideoTranscodeStatus) => {
   if (status === 'success') return 'success';
   if (['failed', 'rollback_failed'].includes(status)) return 'danger';
-  if (['transcoding', 'replacing', 'refreshing_metadata'].includes(status)) return 'warning';
+  if (['transcoding', 'saving_output', 'replacing', 'refreshing_metadata'].includes(status)) return 'warning';
   if (status === 'queued' || status === 'probing' || status === 'verifying') return 'primary';
   return 'info';
 };
@@ -643,6 +796,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   mounted = false;
   window.clearTimeout(timer);
+  window.clearInterval(elapsedTimer);
 });
 
 watch(
@@ -691,6 +845,42 @@ watch(
 .task-table {
   flex: 1 1 46%;
   min-height: 220px;
+}
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+}
+:deep(.row-action.el-button) {
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  transition: color .16s ease, background-color .16s ease;
+}
+:deep(.row-action.el-button .el-icon) { font-size: 14px; }
+:deep(.edit-action.el-button .el-icon) { color: var(--el-color-primary); }
+:deep(.cancel-action.el-button .el-icon) { color: var(--el-color-warning); }
+:deep(.delete-action.el-button .el-icon) { color: var(--el-color-danger); }
+:deep(.edit-action.el-button:hover) {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+:deep(.cancel-action.el-button:hover) {
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
+}
+:deep(.delete-action.el-button:hover) {
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
 }
 .resource-title {
   font-weight: 600;

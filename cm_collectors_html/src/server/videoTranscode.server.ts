@@ -1,10 +1,13 @@
-import request from '@/assets/request';
+import request, { requestBlob } from '@/assets/request';
 import type {
+  I_videoEditPlan,
   I_videoTranscodeAddResult,
   I_videoTranscodeConfig,
+  I_videoTranscodeEditPlanResult,
   I_videoTranscodeCapabilities,
   I_videoTranscodeQueueStatus,
   I_videoTranscodeResetResult,
+  I_videoTranscodeStartResult,
   I_videoTranscodeTask,
 } from '@/dataType/videoTranscode.dataType';
 
@@ -33,15 +36,38 @@ export const videoTranscodeServer = {
     method: 'put',
     data: { ids, config },
   }),
-  start: async (ids: string[] = []) => request<boolean>({
+  saveEditPlan: async (
+    id: string,
+    plan: I_videoEditPlan,
+    outputMode: 'replace' | 'new_file',
+    outputFileName: string,
+  ) => request<I_videoTranscodeEditPlanResult>({
+    url: `${routerGroupUri}/editPlan/${id}`,
+    method: 'put',
+    data: { plan, outputMode, outputFileName },
+  }),
+  thumbnail: async (id: string, at: number) => requestBlob({
+    url: `${routerGroupUri}/thumbnail/${id}`,
+    method: 'get',
+    params: { at },
+  }),
+  start: async (ids: string[] = [], enableGpu = false) => request<I_videoTranscodeStartResult>({
     url: `${routerGroupUri}/start`,
     method: 'post',
-    data: { ids },
+    data: { ids, enableGpu },
   }),
   resetBatch: async (ids: string[]) => request<I_videoTranscodeResetResult>({
     url: `${routerGroupUri}/resetBatch`,
     method: 'post',
     data: { ids },
+  }),
+  retryReplacement: async (id: string) => request<boolean>({
+    url: `${routerGroupUri}/retryReplacement/${id}`,
+    method: 'post',
+  }),
+  saveVerifiedOutputAsNewFile: async (id: string) => request<boolean>({
+    url: `${routerGroupUri}/saveVerifiedOutputAsNewFile/${id}`,
+    method: 'post',
   }),
   pause: async () => request<boolean>({ url: `${routerGroupUri}/pause`, method: 'post' }),
   resume: async () => request<boolean>({ url: `${routerGroupUri}/resume`, method: 'post' }),

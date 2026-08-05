@@ -368,6 +368,9 @@ func (t Resources) DeleteResource(resourceId string) error {
 	}
 	db := core.DBS()
 	return db.Transaction(func(tx *gorm.DB) error {
+		if err := deleteDiscardableVideoTranscodeTasksByResourceIDs(tx, []string{resourceId}); err != nil {
+			return err
+		}
 		err := ResourcesDirectors{}.DeleteByResourcesID(tx, resourceId)
 		if err != nil {
 			return err
@@ -400,6 +403,15 @@ func (t Resources) DeleteResource(resourceId string) error {
 
 func (t Resources) DeleteByFilesBasesID(db *gorm.DB, filesBases_id string, coverPosterSlc []string) error {
 	return db.Transaction(func(tx *gorm.DB) error {
+		var resourceIDs []string
+		if err := tx.Model(&models.Resources{}).
+			Where("filesBases_id = ?", filesBases_id).
+			Pluck("id", &resourceIDs).Error; err != nil {
+			return err
+		}
+		if err := deleteDiscardableVideoTranscodeTasksByResourceIDs(tx, resourceIDs); err != nil {
+			return err
+		}
 		vfM := models.VideoFingerprint{}
 		err := vfM.DeleteByFilesBasesID(tx, filesBases_id)
 		if err != nil {

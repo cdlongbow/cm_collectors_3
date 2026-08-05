@@ -1,6 +1,7 @@
 package processorsffmpeg
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -12,6 +13,17 @@ type M3U8 struct {
 
 // PlayVideoM3u8 流式传输HLS视频片段
 func (v M3U8) PlayVideoM3u8(videoSrc string, start, duration float64, checkPath, transcode bool) (*exec.Cmd, error) {
+	return v.PlayVideoM3u8Context(context.Background(), videoSrc, start, duration, checkPath, transcode)
+}
+
+// PlayVideoM3u8Context 创建可取消的 HLS 分片进程，播放请求结束或源文件即将替换时
+// 会终止 FFmpeg，确保输入文件句柄及时释放。
+func (v M3U8) PlayVideoM3u8Context(
+	ctx context.Context,
+	videoSrc string,
+	start, duration float64,
+	checkPath, transcode bool,
+) (*exec.Cmd, error) {
 	// 使用FFmpeg生成视频片段
 	ffmpegPath, err := FFmpeg{}.IsFFmpegAvailable()
 	if err != nil {
@@ -25,7 +37,7 @@ func (v M3U8) PlayVideoM3u8(videoSrc string, start, duration float64, checkPath,
 	}
 	var cmd *exec.Cmd
 	if transcode {
-		cmd = createCommand(
+		cmd = createCommandContext(ctx,
 			ffmpegPath,
 			"-ss", fmt.Sprintf("%.6f", start), // seek到指定时间点
 			"-i", videoSrc, // 输入文件
@@ -42,7 +54,7 @@ func (v M3U8) PlayVideoM3u8(videoSrc string, start, duration float64, checkPath,
 			"pipe:1", // 输出到标准输出
 		)
 	} else {
-		cmd = createCommand(
+		cmd = createCommandContext(ctx,
 			ffmpegPath,
 			"-ss", fmt.Sprintf("%.6f", start), // seek到指定时间点
 			"-i", videoSrc, // 输入文件
