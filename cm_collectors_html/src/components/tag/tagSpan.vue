@@ -67,7 +67,7 @@ const width_C = computed(() => {
   color: #bdbcbc;
   background-color: #303131;
   font-size: 0.85em;
-  line-height: 0.9em;
+  line-height: 1em;
   /*溢出的部分隐藏*/
   overflow: visible;
   /*文本不换行*/
