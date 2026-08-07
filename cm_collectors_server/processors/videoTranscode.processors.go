@@ -9,6 +9,8 @@ import (
 	processorscache "cm_collectors_server/processorsCache"
 	processorsffmpeg "cm_collectors_server/processorsFFmpeg"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,9 +47,16 @@ type VideoTranscodeConfig struct {
 }
 
 type VideoEditSegment struct {
-	ID    string  `json:"id"`
-	Start float64 `json:"start"`
-	End   float64 `json:"end"`
+	ID         string           `json:"id"`
+	Start      float64          `json:"start"`
+	End        float64          `json:"end"`
+	Transition *VideoTransition `json:"transition,omitempty"`
+}
+
+type VideoTransition struct {
+	Type      string  `json:"type"`
+	Duration  float64 `json:"duration"`
+	AudioFade bool    `json:"audioFade,omitempty"`
 }
 
 type VideoEditPlan struct {
@@ -59,6 +68,20 @@ type VideoTranscodeEditPlanRequest struct {
 	Plan           VideoEditPlan `json:"plan"`
 	OutputMode     string        `json:"outputMode"`
 	OutputFileName string        `json:"outputFileName"`
+}
+
+type VideoTranscodeTransitionPreviewRequest struct {
+	Left  VideoEditSegment `json:"left"`
+	Right VideoEditSegment `json:"right"`
+}
+
+type VideoTranscodeThumbnailBatchRequest struct {
+	Times []float64 `json:"times"`
+}
+
+type VideoTranscodeTimelineThumbnail struct {
+	Time float64 `json:"time"`
+	URL  string  `json:"url"`
 }
 
 func DefaultVideoTranscodeConfig() VideoTranscodeConfig {
@@ -132,6 +155,19 @@ type VideoTranscodeEditPlanResult struct {
 const videoTranscodeVerificationTimeout = 2 * time.Minute
 const videoTranscodeReplacementLockTimeout = 5 * time.Second
 const videoTranscodeReplacementLockAttempts = 3
+const videoTransitionMinDuration = 0.1
+const videoTransitionMaxDuration = 3.0
+const videoTransitionSegmentMargin = 0.05
+const videoTransitionPreviewCacheMaxAge = 7 * 24 * time.Hour
+const videoTransitionPreviewCacheMaxBytes int64 = 512 << 20
+
+var videoTransitionPreviewMu sync.Mutex
+
+type videoTransitionPreviewCacheFile struct {
+	path    string
+	size    int64
+	modTime time.Time
+}
 
 type videoTranscodeVerifyResult struct {
 	Info processorsffmpeg.VideoFormatInfo
@@ -1027,12 +1063,21 @@ func (VideoTranscode) Thumbnail(ctx context.Context, id string, at float64) ([]b
 	if err != nil {
 		return nil, err
 	}
+	readCtx, releaseRead := registerMediaRead(task.SourcePath, ctx)
+	defer releaseRead()
+	if readCtx.Err() != nil {
+		return nil, errors.New("源视频正在替换，请稍后重试")
+	}
 	unlockMedia := lockMediaForRead(task.SourcePath)
 	defer unlockMedia()
+	return generateVideoTranscodeThumbnail(readCtx, ffmpegPath, task.SourcePath, at)
+}
+
+func generateVideoTranscodeThumbnail(ctx context.Context, ffmpegPath, sourcePath string, at float64) ([]byte, error) {
 	cmd := processorsffmpeg.CreateCommandContext(ctx, ffmpegPath,
 		"-hide_banner", "-loglevel", "error",
 		"-ss", strconv.FormatFloat(at, 'f', 3, 64),
-		"-i", task.SourcePath,
+		"-i", sourcePath,
 		"-frames:v", "1", "-an", "-sn",
 		"-vf", "scale=240:-2", "-q:v", "4",
 		"-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
@@ -1045,6 +1090,335 @@ func (VideoTranscode) Thumbnail(ctx context.Context, id string, at float64) ([]b
 		return nil, errors.New("生成的剪辑缩略图为空")
 	}
 	return data, nil
+}
+
+func (VideoTranscode) ThumbnailBatch(
+	ctx context.Context,
+	id string,
+	request VideoTranscodeThumbnailBatchRequest,
+) ([]VideoTranscodeTimelineThumbnail, error) {
+	if len(request.Times) == 0 || len(request.Times) > 160 {
+		return nil, errors.New("缩略图采样数量必须在 1～160 之间")
+	}
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.VideoTranscodeStatusDraft {
+		return nil, errors.New("只能为待转码任务生成剪辑缩略图")
+	}
+	duration, err := videoTranscodeTaskSourceDuration(task)
+	if err != nil {
+		return nil, err
+	}
+	times := make([]float64, len(request.Times))
+	for index, at := range request.Times {
+		if math.IsNaN(at) || math.IsInf(at, 0) {
+			return nil, errors.New("缩略图时间点无效")
+		}
+		times[index] = math.Max(0, math.Min(at, math.Max(0, duration-0.01)))
+	}
+	ffmpegPath, err := (processorsffmpeg.FFmpeg{}).IsFFmpegAvailable()
+	if err != nil {
+		return nil, err
+	}
+	readCtx, releaseRead := registerMediaRead(task.SourcePath, ctx)
+	defer releaseRead()
+	if readCtx.Err() != nil {
+		return nil, errors.New("源视频正在替换，请稍后重试")
+	}
+	unlockMedia := lockMediaForRead(task.SourcePath)
+	defer unlockMedia()
+	result := make([]VideoTranscodeTimelineThumbnail, len(times))
+	jobs := make(chan int)
+	workerCount := min(4, len(times))
+	var workers sync.WaitGroup
+	var firstErr error
+	successCount := 0
+	var errMu sync.Mutex
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if readCtx.Err() != nil {
+					continue
+				}
+				data, thumbnailErr := generateVideoTranscodeThumbnail(
+					readCtx, ffmpegPath, task.SourcePath, times[index],
+				)
+				if thumbnailErr != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = thumbnailErr
+					}
+					errMu.Unlock()
+					continue
+				}
+				result[index] = VideoTranscodeTimelineThumbnail{
+					Time: times[index],
+					URL:  "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+				}
+				errMu.Lock()
+				successCount++
+				errMu.Unlock()
+			}
+		}()
+	}
+	for index := range times {
+		if readCtx.Err() != nil {
+			break
+		}
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	if readCtx.Err() != nil {
+		return nil, readCtx.Err()
+	}
+	if successCount == 0 && firstErr != nil {
+		return nil, fmt.Errorf("批量生成时间轴缩略图失败: %w", firstErr)
+	}
+	return result, nil
+}
+
+func cleanupVideoTransitionPreviewCache(
+	cacheRoot, preservePath string,
+	now time.Time,
+	maxAge time.Duration,
+	maxBytes int64,
+) {
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		return
+	}
+	files := make([]videoTransitionPreviewCacheFile, 0, len(entries))
+	totalBytes := int64(0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(cacheRoot, entry.Name())
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".tmp.webm") {
+			if path != preservePath && now.Sub(info.ModTime()) > time.Hour {
+				_ = os.Remove(path)
+			}
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".webm") {
+			continue
+		}
+		if path != preservePath && now.Sub(info.ModTime()) > maxAge {
+			if os.Remove(path) == nil {
+				continue
+			}
+		}
+		files = append(files, videoTransitionPreviewCacheFile{
+			path: path, size: info.Size(), modTime: info.ModTime(),
+		})
+		totalBytes += info.Size()
+	}
+	if totalBytes <= maxBytes {
+		return
+	}
+	sort.Slice(files, func(left, right int) bool {
+		return files[left].modTime.Before(files[right].modTime)
+	})
+	for _, file := range files {
+		if totalBytes <= maxBytes {
+			break
+		}
+		if file.path == preservePath {
+			continue
+		}
+		if os.Remove(file.path) == nil {
+			totalBytes -= file.size
+		}
+	}
+}
+
+// TransitionPreview 生成只覆盖切点附近的浏览器兼容 WebM 预览。
+func (VideoTranscode) TransitionPreview(
+	ctx context.Context,
+	id string,
+	request VideoTranscodeTransitionPreviewRequest,
+) (string, error) {
+	task, err := (models.VideoTranscodeTask{}).Info(core.DBS(), id)
+	if err != nil {
+		return "", err
+	}
+	if task.Status != models.VideoTranscodeStatusDraft {
+		return "", errors.New("只能预览待转码任务的转场")
+	}
+	duration, err := videoTranscodeTaskSourceDuration(task)
+	if err != nil {
+		return "", err
+	}
+	plan, _, _, err := normalizeVideoEditPlan(VideoEditPlan{
+		Version:  1,
+		Segments: []VideoEditSegment{request.Left, request.Right},
+	}, duration)
+	if err != nil {
+		return "", err
+	}
+	left, right := plan.Segments[0], plan.Segments[1]
+	if left.Transition == nil {
+		return "", errors.New("请先选择转场效果")
+	}
+	stat, err := os.Stat(task.SourcePath)
+	if err != nil {
+		return "", err
+	}
+	identity := fmt.Sprintf(
+		"%s|%d|%d|transition-v5-colored-fade|%.6f|%.6f|%.6f|%.6f|%s|%.6f|%t",
+		mediaPathKey(task.SourcePath), stat.Size(), stat.ModTime().UnixNano(),
+		left.Start, left.End, right.Start, right.End,
+		left.Transition.Type, left.Transition.Duration, left.Transition.AudioFade,
+	)
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		cacheRoot = os.TempDir()
+	}
+	cacheRoot = filepath.Join(cacheRoot, "cm_collectors_3", "transition-previews")
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		return "", fmt.Errorf("创建转场预览缓存目录失败: %w", err)
+	}
+	previewPath := filepath.Join(cacheRoot, fmt.Sprintf("%x.webm", sha256.Sum256([]byte(identity))))
+	videoTransitionPreviewMu.Lock()
+	defer videoTransitionPreviewMu.Unlock()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	cleanupVideoTransitionPreviewCache(
+		cacheRoot, previewPath, time.Now(),
+		videoTransitionPreviewCacheMaxAge, videoTransitionPreviewCacheMaxBytes,
+	)
+	if cached, statErr := os.Stat(previewPath); statErr == nil && cached.Size() > 0 {
+		now := time.Now()
+		_ = os.Chtimes(previewPath, now, now)
+		return previewPath, nil
+	}
+	ffmpegPath, err := (processorsffmpeg.FFmpeg{}).IsFFmpegAvailable()
+	if err != nil {
+		return "", err
+	}
+	sourceInfo, _, err := videoTranscodeTaskPreciseSourceInfo(task)
+	if err != nil {
+		return "", err
+	}
+	primaryVideo := (processorsffmpeg.VideoInfo{}).PrimaryVideoStream(sourceInfo)
+	if primaryVideo == nil {
+		return "", errors.New("源文件不包含有效视频流")
+	}
+	var audioIndex = -1
+	for _, stream := range sourceInfo.Streams {
+		if stream.CodecType == "audio" {
+			audioIndex = stream.Index
+			break
+		}
+	}
+	halfDuration := left.Transition.Duration / 2
+	lead := math.Min(0.75, math.Max(0, left.End-left.Start-halfDuration))
+	tail := math.Min(0.75, math.Max(0, right.End-right.Start-halfDuration))
+	leftStart := left.End - halfDuration - lead
+	rightEnd := right.Start + halfDuration + tail
+	videoNormalize := "scale=640:-2:force_original_aspect_ratio=decrease,setsar=1,fps=24,format=yuv420p,settb=AVTB"
+	graph := make([]string, 0, 14)
+	leftParts := make([]string, 0, 2)
+	if lead > 0.001 {
+		graph = append(graph, fmt.Sprintf(
+			"[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,%s[lpre]",
+			primaryVideo.Index, leftStart, left.End-halfDuration, videoNormalize))
+		leftParts = append(leftParts, "[lpre]")
+	}
+	graph = append(graph,
+		fmt.Sprintf("[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,%s,split=2[lreal][lbackdropsrc]",
+			primaryVideo.Index, left.End-halfDuration, left.End, videoNormalize),
+		fmt.Sprintf("[lbackdropsrc]%s[lbackdrop]", overlayTransitionBackdropFilter(left.Transition.Type)),
+		fmt.Sprintf("[lreal][lbackdrop]xfade=transition=%s:duration=%.6f:offset=0[ltransition]",
+			overlayTransitionFilterType(left.Transition.Type), halfDuration),
+	)
+	leftParts = append(leftParts, "[ltransition]")
+	leftOutput := leftParts[0]
+	if len(leftParts) > 1 {
+		graph = append(graph, strings.Join(leftParts, "")+"concat=n=2:v=1:a=0[lout]")
+		leftOutput = "[lout]"
+	}
+	graph = append(graph,
+		fmt.Sprintf("[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,%s,split=2[rreal][rbackdropsrc]",
+			primaryVideo.Index, right.Start, right.Start+halfDuration, videoNormalize),
+		fmt.Sprintf("[rbackdropsrc]%s[rbackdrop]", overlayTransitionBackdropFilter(left.Transition.Type)),
+		fmt.Sprintf("[rbackdrop][rreal]xfade=transition=%s:duration=%.6f:offset=0[rtransition]",
+			overlayTransitionFilterType(left.Transition.Type), halfDuration),
+	)
+	rightParts := []string{"[rtransition]"}
+	if tail > 0.001 {
+		graph = append(graph, fmt.Sprintf(
+			"[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,%s[rtail]",
+			primaryVideo.Index, right.Start+halfDuration, rightEnd, videoNormalize))
+		rightParts = append(rightParts, "[rtail]")
+	}
+	rightOutput := rightParts[0]
+	if len(rightParts) > 1 {
+		graph = append(graph, strings.Join(rightParts, "")+"concat=n=2:v=1:a=0[rout]")
+		rightOutput = "[rout]"
+	}
+	graph = append(graph, leftOutput+rightOutput+"concat=n=2:v=1:a=0[vout]")
+	if audioIndex >= 0 {
+		leftAudio := fmt.Sprintf("[0:%d]atrim=start=%.6f:end=%.6f,asetpts=PTS-STARTPTS",
+			audioIndex, leftStart, left.End)
+		rightAudio := fmt.Sprintf("[0:%d]atrim=start=%.6f:end=%.6f,asetpts=PTS-STARTPTS",
+			audioIndex, right.Start, rightEnd)
+		if left.Transition.AudioFade {
+			leftAudio += fmt.Sprintf(",afade=t=out:st=%.6f:d=%.6f", lead, halfDuration)
+			rightAudio += fmt.Sprintf(",afade=t=in:st=0:d=%.6f", halfDuration)
+		}
+		graph = append(graph, leftAudio+"[la]", rightAudio+"[ra]", "[la][ra]concat=n=2:v=0:a=1[aout]")
+	}
+	temporaryPath := previewPath + ".tmp.webm"
+	_ = os.Remove(temporaryPath)
+	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", task.SourcePath,
+		"-filter_complex", strings.Join(graph, ";"), "-map", "[vout]"}
+	if audioIndex >= 0 {
+		args = append(args, "-map", "[aout]")
+	}
+	args = append(args, "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8",
+		"-b:v", "900k", "-crf", "34", "-pix_fmt", "yuv420p")
+	if audioIndex >= 0 {
+		args = append(args, "-c:a", "libopus", "-b:a", "64k", "-ac", "2")
+	} else {
+		args = append(args, "-an")
+	}
+	args = append(args, "-f", "webm", temporaryPath)
+	readCtx, releaseRead := registerMediaRead(task.SourcePath, ctx)
+	defer releaseRead()
+	if readCtx.Err() != nil {
+		return "", errors.New("源视频正在替换，请稍后重试")
+	}
+	unlockMedia := lockMediaForRead(task.SourcePath)
+	defer unlockMedia()
+	cmd := processorsffmpeg.CreateCommandContext(readCtx, ffmpegPath, args...)
+	if output, runErr := cmd.CombinedOutput(); runErr != nil {
+		_ = os.Remove(temporaryPath)
+		message := strings.TrimSpace(string(output))
+		if len(message) > 2000 {
+			message = message[len(message)-2000:]
+		}
+		return "", fmt.Errorf("生成转场预览失败: %v: %s", runErr, message)
+	}
+	if err := os.Rename(temporaryPath, previewPath); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", fmt.Errorf("保存转场预览失败: %w", err)
+	}
+	cleanupVideoTransitionPreviewCache(
+		cacheRoot, previewPath, time.Now(),
+		videoTransitionPreviewCacheMaxAge, videoTransitionPreviewCacheMaxBytes,
+	)
+	return previewPath, nil
 }
 
 func videoTranscodeTaskSourceDuration(task *models.VideoTranscodeTask) (float64, error) {
@@ -1129,6 +1503,23 @@ func normalizeVideoEditPlan(
 			return VideoEditPlan{}, 0, false, errors.New("剪辑片段 ID 重复")
 		}
 		seenIDs[segment.ID] = struct{}{}
+		if index == len(plan.Segments)-1 {
+			segment.Transition = nil
+		} else if segment.Transition != nil {
+			transition := *segment.Transition
+			transition.Duration = math.Round(transition.Duration*1000) / 1000
+			if !supportedVideoTransition(transition.Type) {
+				return VideoEditPlan{}, 0, false, fmt.Errorf("第 %d 个剪辑片段的转场类型不受支持", index+1)
+			}
+			if transition.Duration < videoTransitionMinDuration ||
+				transition.Duration > videoTransitionMaxDuration+0.001 {
+				return VideoEditPlan{}, 0, false, fmt.Errorf(
+					"第 %d 个剪辑片段的转场时长必须在 %.1f～%.1f 秒之间",
+					index+1, videoTransitionMinDuration, videoTransitionMaxDuration,
+				)
+			}
+			segment.Transition = &transition
+		}
 		normalized.Segments[index] = segment
 	}
 	bySourceTime := append([]VideoEditSegment(nil), normalized.Segments...)
@@ -1136,6 +1527,19 @@ func normalizeVideoEditPlan(
 	for index := 1; index < len(bySourceTime); index++ {
 		if bySourceTime[index].Start < bySourceTime[index-1].End-0.01 {
 			return VideoEditPlan{}, 0, false, errors.New("剪辑片段不能重叠或重复使用同一段画面")
+		}
+	}
+	for index, segment := range normalized.Segments {
+		incomingHalf := 0.0
+		if index > 0 && normalized.Segments[index-1].Transition != nil {
+			incomingHalf = normalized.Segments[index-1].Transition.Duration / 2
+		}
+		outgoingHalf := 0.0
+		if segment.Transition != nil {
+			outgoingHalf = segment.Transition.Duration / 2
+		}
+		if incomingHalf+outgoingHalf > segment.End-segment.Start-videoTransitionSegmentMargin+0.001 {
+			return VideoEditPlan{}, 0, false, fmt.Errorf("第 %d 个剪辑片段太短，无法容纳前后转场", index+1)
 		}
 	}
 	editedDuration := 0.0
@@ -1146,6 +1550,31 @@ func normalizeVideoEditPlan(
 		normalized.Segments[0].Start > 0.01 ||
 		math.Abs(normalized.Segments[0].End-sourceDuration) > 0.05
 	return normalized, editedDuration, hasEdits, nil
+}
+
+func supportedVideoTransition(transitionType string) bool {
+	switch transitionType {
+	case "fade", "fadeblack", "dissolve", "wipeleft", "wiperight",
+		"slideleft", "slideright", "hlslice", "vuslice", "circleopen", "pixelize":
+		return true
+	default:
+		return false
+	}
+}
+
+func overlayTransitionFilterType(transitionType string) string {
+	if transitionType == "fadeblack" {
+		return "fade"
+	}
+	return transitionType
+}
+
+func overlayTransitionBackdropFilter(transitionType string) string {
+	color := "black"
+	if transitionType == "fade" {
+		color = "white"
+	}
+	return fmt.Sprintf("drawbox=x=0:y=0:w=iw:h=ih:color=%s@0.98:t=fill", color)
 }
 
 func (VideoTranscode) Start(request VideoTranscodeStartRequest) (*VideoTranscodeStartResult, error) {
@@ -2153,33 +2582,83 @@ func buildVideoEditFilterGraph(
 	plan VideoEditPlan,
 	config VideoTranscodeConfig,
 ) (string, []string) {
-	filters := make([]string, 0, len(plan.Segments)*3)
-	videoInputs := strings.Builder{}
+	filters := make([]string, 0, len(plan.Segments)*8)
+	videoLabels := make([]string, 0, len(plan.Segments))
 	for index, segment := range plan.Segments {
-		label := fmt.Sprintf("v%d", index)
-		filters = append(filters, fmt.Sprintf(
-			"[0:%d]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS[%s]",
-			primaryVideoIndex, segment.Start, segment.End, label,
-		))
-		videoInputs.WriteString("[")
-		videoInputs.WriteString(label)
-		videoInputs.WriteString("]")
+		var incoming *VideoTransition
+		if index > 0 {
+			incoming = plan.Segments[index-1].Transition
+		}
+		incomingHalf := 0.0
+		if incoming != nil {
+			incomingHalf = incoming.Duration / 2
+		}
+		outgoingHalf := 0.0
+		if segment.Transition != nil {
+			outgoingHalf = segment.Transition.Duration / 2
+		}
+		videoParts := make([]string, 0, 3)
+		if incoming != nil {
+			realLabel := fmt.Sprintf("v%d_in_real", index)
+			backdropSourceLabel := fmt.Sprintf("v%d_in_backdrop_src", index)
+			backdropLabel := fmt.Sprintf("v%d_in_backdrop", index)
+			partLabel := fmt.Sprintf("v%d_in", index)
+			filters = append(filters,
+				fmt.Sprintf("[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,settb=AVTB,split=2[%s][%s]",
+					primaryVideoIndex, segment.Start, segment.Start+incomingHalf, realLabel, backdropSourceLabel),
+				fmt.Sprintf("[%s]%s[%s]", backdropSourceLabel, overlayTransitionBackdropFilter(incoming.Type), backdropLabel),
+				fmt.Sprintf("[%s][%s]xfade=transition=%s:duration=%.6f:offset=0[%s]",
+					backdropLabel, realLabel, overlayTransitionFilterType(incoming.Type), incomingHalf, partLabel),
+			)
+			videoParts = append(videoParts, "["+partLabel+"]")
+		}
+		middleStart := segment.Start + incomingHalf
+		middleEnd := segment.End - outgoingHalf
+		if middleEnd-middleStart > 0.001 {
+			partLabel := fmt.Sprintf("v%d_mid", index)
+			filters = append(filters, fmt.Sprintf(
+				"[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,settb=AVTB[%s]",
+				primaryVideoIndex, middleStart, middleEnd, partLabel,
+			))
+			videoParts = append(videoParts, "["+partLabel+"]")
+		}
+		if segment.Transition != nil {
+			realLabel := fmt.Sprintf("v%d_out_real", index)
+			backdropSourceLabel := fmt.Sprintf("v%d_out_backdrop_src", index)
+			backdropLabel := fmt.Sprintf("v%d_out_backdrop", index)
+			partLabel := fmt.Sprintf("v%d_out", index)
+			filters = append(filters,
+				fmt.Sprintf("[0:%d]trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,settb=AVTB,split=2[%s][%s]",
+					primaryVideoIndex, segment.End-outgoingHalf, segment.End, realLabel, backdropSourceLabel),
+				fmt.Sprintf("[%s]%s[%s]", backdropSourceLabel, overlayTransitionBackdropFilter(segment.Transition.Type), backdropLabel),
+				fmt.Sprintf("[%s][%s]xfade=transition=%s:duration=%.6f:offset=0[%s]",
+					realLabel, backdropLabel, overlayTransitionFilterType(segment.Transition.Type), outgoingHalf, partLabel),
+			)
+			videoParts = append(videoParts, "["+partLabel+"]")
+		}
+		videoLabel := fmt.Sprintf("v%d", index)
+		if len(videoParts) == 1 {
+			videoLabels = append(videoLabels, videoParts[0])
+		} else {
+			filters = append(filters, strings.Join(videoParts, "")+
+				fmt.Sprintf("concat=n=%d:v=1:a=0[%s]", len(videoParts), videoLabel))
+			videoLabels = append(videoLabels, "["+videoLabel+"]")
+		}
+	}
+	currentVideo := videoLabels[0]
+	for index := 1; index < len(videoLabels); index++ {
+		outputLabel := fmt.Sprintf("vjoin%d", index)
+		filters = append(filters, currentVideo+videoLabels[index]+"concat=n=2:v=1:a=0["+outputLabel+"]")
+		currentVideo = "[" + outputLabel + "]"
 	}
 	videoOutputLabel := "vout"
 	if config.ResolutionHeight > 0 {
 		filters = append(filters, fmt.Sprintf(
-			"%sconcat=n=%d:v=1:a=0[vjoined]",
-			videoInputs.String(), len(plan.Segments),
-		))
-		filters = append(filters, fmt.Sprintf(
-			"[vjoined]scale=-2:min(ih\\,%d)[%s]",
-			config.ResolutionHeight, videoOutputLabel,
+			"%sscale=-2:min(ih\\,%d)[%s]",
+			currentVideo, config.ResolutionHeight, videoOutputLabel,
 		))
 	} else {
-		filters = append(filters, fmt.Sprintf(
-			"%sconcat=n=%d:v=1:a=0[%s]",
-			videoInputs.String(), len(plan.Segments), videoOutputLabel,
-		))
+		filters = append(filters, currentVideo+"null["+videoOutputLabel+"]")
 	}
 	outputLabels := []string{"[" + videoOutputLabel + "]"}
 	audioOutputIndex := 0
@@ -2190,10 +2669,22 @@ func buildVideoEditFilterGraph(
 		audioInputs := strings.Builder{}
 		for segmentIndex, segment := range plan.Segments {
 			label := fmt.Sprintf("a%d_%d", audioOutputIndex, segmentIndex)
-			filters = append(filters, fmt.Sprintf(
-				"[0:%d]atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS[%s]",
-				stream.Index, segment.Start, segment.End, label,
-			))
+			audioFilter := fmt.Sprintf(
+				"[0:%d]atrim=start=%.6f:end=%.6f,asetpts=PTS-STARTPTS",
+				stream.Index, segment.Start, segment.End,
+			)
+			if segmentIndex > 0 {
+				incoming := plan.Segments[segmentIndex-1].Transition
+				if incoming != nil && incoming.AudioFade {
+					audioFilter += fmt.Sprintf(",afade=t=in:st=0:d=%.6f", incoming.Duration/2)
+				}
+			}
+			if segment.Transition != nil && segment.Transition.AudioFade {
+				outgoingHalf := segment.Transition.Duration / 2
+				audioFilter += fmt.Sprintf(",afade=t=out:st=%.6f:d=%.6f",
+					segment.End-segment.Start-outgoingHalf, outgoingHalf)
+			}
+			filters = append(filters, audioFilter+"["+label+"]")
 			audioInputs.WriteString("[")
 			audioInputs.WriteString(label)
 			audioInputs.WriteString("]")

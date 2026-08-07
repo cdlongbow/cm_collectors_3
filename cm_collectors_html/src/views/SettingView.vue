@@ -24,7 +24,7 @@
         <el-tab-pane label="视频信息采集" name="videoMetadata">
           <videoMetadataSetting v-if="activeName === 'videoMetadata'" />
         </el-tab-pane>
-        <el-tab-pane label="视频转码" name="videoTranscode">
+        <el-tab-pane label="视频转码与剪辑" name="videoTranscode">
           <videoTranscodeSetting v-if="activeName === 'videoTranscode'" />
         </el-tab-pane>
         <el-tab-pane label="计划任务" name="cronJobs">

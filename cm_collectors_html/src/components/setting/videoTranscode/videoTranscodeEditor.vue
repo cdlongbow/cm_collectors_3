@@ -22,14 +22,61 @@
 
     <div class="editor-layout" v-loading="initializing">
       <section class="preview-panel">
-        <videoPlay ref="videoPlayRef" class="editor-player" fit-container hide-controls />
-        <div class="preview-status">
-          <el-button size="small" type="primary" @click="togglePlayback">
-            {{ isPlaying ? '暂停' : '播放' }}
-          </el-button>
+        <div class="preview-stage">
+          <videoPlay v-show="!transitionPreviewing" ref="videoPlayRef" class="editor-player" fit-container hide-controls />
+          <video
+            v-show="transitionPreviewing"
+            ref="transitionVideoRef"
+            class="transition-player"
+            :src="transitionPreviewUrl"
+            playsinline
+            @play="isPlaying = true"
+            @pause="isPlaying = false"
+            @timeupdate="handleTransitionPreviewTimeUpdate"
+            @ended="finishTransitionPreview"
+          />
+        </div>
+        <div class="player-controls">
+          <el-button
+            circle
+            :icon="isPlaying ? VideoPause : VideoPlay"
+            :title="isPlaying ? '暂停' : '播放'"
+            :loading="transitionPreviewLoading"
+            :disabled="initializing || !segments.length"
+            @click="togglePlayback"
+          />
+          <el-button
+            circle
+            :icon="muted || volume === 0 ? Mute : Microphone"
+            :title="muted || volume === 0 ? '取消静音' : '静音'"
+            @click="toggleMute"
+          />
+          <el-slider
+            class="volume-slider"
+            :model-value="muted ? 0 : volume"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            :show-tooltip="false"
+            @input="setVolume"
+          />
+          <span class="time-label">{{ formatTime(currentOutputTime) }} / {{ formatTime(editedDuration) }}</span>
+          <el-slider
+            class="output-slider"
+            :model-value="currentOutputTime"
+            :min="0"
+            :max="Math.max(editedDuration, 0.01)"
+            :step="0.01"
+            :show-tooltip="false"
+            :disabled="initializing || !segments.length"
+            @input="seekOutputTime"
+          />
+          <div class="preview-status">
           <span>片段 {{ activeSegmentIndex + 1 }}/{{ segments.length }}</span>
-          <span>成片 {{ formatTime(currentOutputTime) }} / {{ formatTime(editedDuration) }}</span>
-          <span class="preview-tip">当前预览为保留片段按现有顺序拼接后的效果</span>
+          <span class="preview-tip">
+            {{ transitionPreviewing ? '正在预览片段切点转场' : '当前预览为保留片段按现有顺序拼接后的效果' }}
+          </span>
+          </div>
         </div>
       </section>
 
@@ -44,52 +91,138 @@
           <el-button :disabled="!undoStack.length" @click="undo">撤销</el-button>
           <el-button :disabled="!redoStack.length" @click="redo">重做</el-button>
           <el-button @click="resetPlan">恢复完整视频</el-button>
+          <el-button-group class="timeline-zoom-controls">
+            <el-button :icon="ZoomOut" title="缩小时间轴" @click="zoomTimeline(1 / 1.25)" />
+            <el-button title="让全部片段适配当前宽度" @click="fitTimeline">适配</el-button>
+            <el-button :icon="ZoomIn" title="放大时间轴" @click="zoomTimeline(1.25)" />
+          </el-button-group>
+          <small class="zoom-value">{{ timelinePixelsPerSecond.toFixed(1) }} px/秒</small>
           <span>拖动片段可以调整成片顺序，点击片段可以定位播放。</span>
         </div>
 
         <div class="timeline-ruler">
-          <span>00:00</span>
-          <span>{{ formatTime(editedDuration / 2) }}</span>
-          <span>{{ formatTime(editedDuration) }}</span>
+          <span>{{ formatTime(timelineVisibleStart) }}</span>
+          <span>{{ formatTime(timelineVisibleMiddle) }}</span>
+          <span>{{ formatTime(timelineVisibleEnd) }}</span>
         </div>
-        <div v-if="segments.length" ref="timelineTrackRef" class="timeline-track">
+        <div class="timeline-viewport-shell">
           <div
-            v-for="(segment, index) in segments"
-            :key="segment.id"
-            class="timeline-segment"
-            :class="{ active: segment.id === activeSegmentId, dragging: dragIndex === index }"
-            :style="segmentStyle(segment)"
-            :data-segment-id="segment.id"
-            draggable="true"
-            @click="seekWithinSegment($event, segment)"
-            @dragstart="startDrag($event, index)"
-            @dragover.prevent
-            @drop.prevent="dropSegment(index)"
-            @dragend="dragIndex = -1"
+            v-if="segments.length"
+            ref="timelineViewportRef"
+            class="timeline-viewport"
+            @wheel="onTimelineWheel"
+            @scroll="updateTimelineRuler"
           >
-            <div class="segment-thumbnails">
-              <img
-                v-for="frame in framesForSegment(segment)"
-                :key="frame.time"
-                :src="frame.url"
-                draggable="false"
-              />
-              <div v-if="!framesForSegment(segment).length" class="thumbnail-placeholder">加载缩略图</div>
-            </div>
-            <div class="segment-label">
-              <strong>{{ index + 1 }}</strong>
-              <span>{{ formatTime(segment.start) }} - {{ formatTime(segment.end) }}</span>
-              <span>{{ formatTime(segment.end - segment.start) }}</span>
+            <div ref="timelineTrackRef" class="timeline-track">
+              <template v-for="(segment, index) in segments" :key="segment.id">
+                <div
+                  class="timeline-segment"
+                  :class="{ active: segment.id === activeSegmentId, dragging: dragIndex === index }"
+                  :style="segmentStyle(segment)"
+                  :data-segment-id="segment.id"
+                  draggable="true"
+                  @click="seekWithinSegment($event, segment)"
+                  @dragstart="startDrag($event, index)"
+                  @dragover.prevent
+                  @drop.prevent="dropSegment(index)"
+                  @dragend="dragIndex = -1"
+                >
+                  <div class="segment-thumbnails">
+                    <img
+                      v-for="frame in framesForSegment(segment)"
+                      :key="frame.time"
+                      :src="frame.url"
+                      draggable="false"
+                    />
+                    <div v-if="!framesForSegment(segment).length" class="thumbnail-placeholder">加载缩略图</div>
+                  </div>
+                  <div class="segment-label">
+                    <strong>{{ index + 1 }}</strong>
+                    <span>{{ formatTime(segment.start) }} - {{ formatTime(segment.end) }}</span>
+                    <span>{{ formatTime(segment.end - segment.start) }}</span>
+                  </div>
+                </div>
+
+                <el-popover
+                  v-if="index < segments.length - 1"
+                  placement="top"
+                  :width="300"
+                  trigger="click"
+                >
+                  <div class="transition-editor" @click.stop>
+                    <strong>片段 {{ index + 1 }} → {{ index + 2 }} 的转场</strong>
+                    <el-select
+                      :model-value="segment.transition?.type || ''"
+                      placeholder="无转场"
+                      clearable
+                      :teleported="false"
+                      @change="setTransitionType(index, String($event || ''))"
+                    >
+                      <el-option
+                        v-for="effect in transitionEffects"
+                        :key="effect.value"
+                        :label="effect.label"
+                        :value="effect.value"
+                      />
+                    </el-select>
+                    <div v-if="segment.transition" class="transition-duration-row">
+                      <span>时长</span>
+                      <el-input-number
+                        :model-value="segment.transition.duration"
+                        :min="0.1"
+                        :max="transitionMaxDuration(index)"
+                        :step="0.1"
+                        :precision="1"
+                        controls-position="right"
+                        @change="setTransitionDuration(index, Number($event))"
+                      />
+                      <span>秒</span>
+                    </div>
+                    <div v-if="segment.transition" class="transition-audio-row">
+                      <span>音频淡出淡入</span>
+                      <el-switch
+                        :model-value="!!segment.transition.audioFade"
+                        @change="setTransitionAudioFade(index, Boolean($event))"
+                      />
+                      <small>默认保持原音量，开启后在切点前后各淡化一半时长。</small>
+                    </div>
+                    <el-button
+                      v-if="segment.transition"
+                      type="primary"
+                      plain
+                      :loading="transitionPreviewLoading && transitionPreviewIndex === index"
+                      @click="playTransitionPreview(index, false)"
+                    >
+                      预览转场
+                    </el-button>
+                  </div>
+                  <template #reference>
+                    <button
+                      class="transition-node"
+                      :class="{ active: !!segment.transition }"
+                      type="button"
+                      @click.stop
+                    >
+                      <span>{{ transitionShortLabel(segment) }}</span>
+                      <small v-if="segment.transition">{{ segment.transition.duration.toFixed(1) }}s</small>
+                    </button>
+                  </template>
+                </el-popover>
+              </template>
+              <div
+                class="timeline-playhead"
+                :class="{ dragging: draggingPlayhead }"
+                :style="{ left: `${playheadLeft}px` }"
+                title="拖动调整播放位置"
+                @pointerdown.stop.prevent="startPlayheadDrag"
+              >
+                <div class="playhead-handle" />
+              </div>
             </div>
           </div>
-          <div
-            class="timeline-playhead"
-            :class="{ dragging: draggingPlayhead }"
-            :style="{ left: `${playheadLeft}px` }"
-            title="拖动调整播放位置"
-            @pointerdown.stop.prevent="startPlayheadDrag"
-          >
-            <div class="playhead-handle" />
+          <div v-if="thumbnailLoading" class="timeline-thumbnail-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>正在生成时间轴缩略图（{{ thumbnailLoadingCount }} 张）…</span>
           </div>
         </div>
         <el-alert
@@ -132,6 +265,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Loading, Microphone, Mute, VideoPause, VideoPlay, ZoomIn, ZoomOut } from '@element-plus/icons-vue';
 import videoPlay from '@/components/play/videoPlay.vue';
 import { getPlayVideoURLAndType } from '@/common/play';
 import type {
@@ -158,11 +292,19 @@ const emit = defineEmits<{
 }>();
 
 const videoPlayRef = ref<InstanceType<typeof videoPlay>>();
+const transitionVideoRef = ref<HTMLVideoElement>();
+const timelineViewportRef = ref<HTMLElement>();
 const timelineTrackRef = ref<HTMLElement>();
 const segments = ref<I_videoEditSegment[]>([]);
 const undoStack = ref<I_videoEditSegment[][]>([]);
 const redoStack = ref<I_videoEditSegment[][]>([]);
 const thumbnailFrames = ref<ThumbnailFrame[]>([]);
+const thumbnailLoading = ref(false);
+const thumbnailLoadingCount = ref(0);
+const timelinePixelsPerSecond = ref(12);
+const timelineVisibleStart = ref(0);
+const timelineVisibleMiddle = ref(0);
+const timelineVisibleEnd = ref(0);
 const sourceDuration = ref(0);
 const activeSegmentId = ref('');
 const currentSourceTime = ref(0);
@@ -171,20 +313,68 @@ const initializing = ref(false);
 const saving = ref(false);
 const dragIndex = ref(-1);
 const isPlaying = ref(false);
+const volumePreferenceKey = 'cm-video-transcode-editor-volume-v1';
+const loadVolumePreference = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(volumePreferenceKey) || '{}');
+    const storedVolume = Number(stored.volume);
+    return {
+      volume: Number.isFinite(storedVolume) ? Math.min(1, Math.max(0, storedVolume)) : 1,
+      muted: stored.muted === true,
+    };
+  } catch {
+    return { volume: 1, muted: false };
+  }
+};
+const initialVolumePreference = loadVolumePreference();
+const volume = ref(initialVolumePreference.volume);
+const muted = ref(initialVolumePreference.muted);
+const lastAudibleVolume = ref(initialVolumePreference.volume > 0 ? initialVolumePreference.volume : 1);
 const draggingPlayhead = ref(false);
 const playheadLeft = ref(2);
 const outputMode = ref<'replace' | 'new_file'>('new_file');
 const outputFileName = ref('');
+const transitionPreviewUrl = ref('');
+const transitionPreviewing = ref(false);
+const transitionPreviewLoading = ref(false);
+const transitionPreviewAuto = ref(false);
+const transitionPreviewIndex = ref(-1);
 let pollTimer: number | undefined;
 let thumbnailLoadVersion = 0;
+let thumbnailRefreshTimer: number | undefined;
+let thumbnailAbortController: AbortController | undefined;
 let initializedDurationFromPlayer = false;
 let hadStoredEditPlan = false;
 let closingAfterSave = false;
+let transitionPreviewRequestID = 0;
+let transitionPreviewStopAt = Number.POSITIVE_INFINITY;
+let transitionPreviewAbortController: AbortController | undefined;
+const thumbnailCache = new Map<string, ThumbnailFrame[]>();
+const transitionPreviewCache = new Map<string, string>();
 
-const cloneSegments = (items: I_videoEditSegment[]) => items.map(item => ({ ...item }));
+const timelineMinPixelsPerSecond = 0.5;
+const timelineMaxPixelsPerSecond = 100;
+const transitionEffects = [
+  { value: 'fade', label: '淡入淡出至白色', short: '淡白' },
+  { value: 'fadeblack', label: '淡入淡出至黑色', short: '淡黑' },
+  { value: 'dissolve', label: '溶解', short: '溶解' },
+  { value: 'wipeleft', label: '向左擦除', short: '左擦' },
+  { value: 'wiperight', label: '向右擦除', short: '右擦' },
+  { value: 'slideleft', label: '向左滑动', short: '左滑' },
+  { value: 'slideright', label: '向右滑动', short: '右滑' },
+  { value: 'hlslice', label: '水平百叶窗', short: '横百叶' },
+  { value: 'vuslice', label: '垂直百叶窗', short: '竖百叶' },
+  { value: 'circleopen', label: '圆形展开', short: '圆形' },
+  { value: 'pixelize', label: '像素化', short: '像素' },
+] as const;
+
+const cloneSegments = (items: I_videoEditSegment[]) => items.map(item => ({
+  ...item,
+  transition: item.transition ? { ...item.transition } : undefined,
+}));
 const makeSegmentID = () => `segment-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 const snapshot = () => JSON.stringify({
-  segments: segments.value.map(({ id, start, end }) => ({ id, start, end })),
+  segments: cloneSegments(segments.value),
   outputMode: outputMode.value,
   outputFileName: outputFileName.value,
 });
@@ -206,9 +396,73 @@ const currentOutputTime = computed(() => {
   const segment = activeSegment.value;
   return segment ? before + Math.max(0, Math.min(currentSourceTime.value, segment.end) - segment.start) : 0;
 });
+const applyVolumeToPlayers = () => {
+  const actualVolume = muted.value ? 0 : volume.value;
+  videoPlayRef.value?.setVolume(actualVolume);
+  if (transitionVideoRef.value) {
+    transitionVideoRef.value.volume = actualVolume;
+    transitionVideoRef.value.muted = false;
+  }
+};
+const saveVolumePreference = () => {
+  try {
+    localStorage.setItem(volumePreferenceKey, JSON.stringify({
+      volume: volume.value,
+      muted: muted.value,
+    }));
+  } catch {
+    // 本地存储不可用时仍保留当前会话中的音量设置。
+  }
+};
+const toggleMute = () => {
+  if (muted.value && volume.value <= 0) volume.value = lastAudibleVolume.value;
+  muted.value = !muted.value;
+  applyVolumeToPlayers();
+  saveVolumePreference();
+};
+const setVolume = (value: number | number[]) => {
+  const nextVolume = Array.isArray(value) ? value[0] : value;
+  volume.value = Math.min(1, Math.max(0, Number(nextVolume) || 0));
+  muted.value = volume.value === 0;
+  if (volume.value > 0) lastAudibleVolume.value = volume.value;
+  applyVolumeToPlayers();
+  saveVolumePreference();
+};
+const sourcePositionFromOutput = (value: number) => {
+  const clamped = Math.max(0, Math.min(value, editedDuration.value));
+  let elapsed = 0;
+  for (let index = 0; index < segments.value.length; index++) {
+    const segment = segments.value[index];
+    const duration = segment.end - segment.start;
+    if (clamped < elapsed + duration || index === segments.value.length - 1) {
+      return {
+        segment,
+        sourceTime: segment.start + Math.max(0, Math.min(duration, clamped - elapsed)),
+      };
+    }
+    elapsed += duration;
+  }
+  return undefined;
+};
+const seekOutputTime = (value: number | number[]) => {
+  const nextTime = Array.isArray(value) ? value[0] : value;
+  const target = sourcePositionFromOutput(Number(nextTime) || 0);
+  if (!target) return;
+  const resumePlayback = isPlaying.value;
+  if (transitionPreviewing.value || transitionPreviewLoading.value) stopTransitionPreview();
+  seekToSegment(target.segment, target.sourceTime);
+  if (resumePlayback) {
+    void videoPlayRef.value?.play();
+    isPlaying.value = true;
+  }
+};
 const initializeEditor = async () => {
   initializing.value = true;
   closingAfterSave = false;
+  thumbnailCache.clear();
+  thumbnailFrames.value = [];
+  thumbnailLoading.value = false;
+  stopTransitionPreview(false);
   sourceDuration.value = props.task.sourceDuration || 0;
   const savedSegments = props.task.editPlan?.segments || [];
   hadStoredEditPlan = savedSegments.length > 0;
@@ -228,17 +482,18 @@ const initializeEditor = async () => {
   initialSnapshot.value = snapshot();
   initializedDurationFromPlayer = false;
   await nextTick();
-  updatePlayheadPosition();
-  window.addEventListener('resize', updatePlayheadPosition);
+  fitTimeline();
+  window.addEventListener('resize', handleEditorResize);
   const { playUrl, playType } = await getPlayVideoURLAndType(props.task.dramaSeriesId);
   if (playUrl) {
     videoPlayRef.value?.setVideoSource(playUrl, playType, () => {
+      applyVolumeToPlayers();
       seekToSegment(segments.value[0]);
     }, fileName(props.task.sourcePath));
   }
   startPolling();
   initializing.value = false;
-  if (sourceDuration.value > 0) void ensureTimelineThumbnails(true);
+  if (sourceDuration.value > 0) scheduleThumbnailRefresh(true);
 };
 
 const startPolling = () => {
@@ -256,17 +511,32 @@ const startPolling = () => {
         activeSegmentId.value = segments.value[0].id;
         initialSnapshot.value = snapshot();
       }
-      if (durationChanged || !thumbnailFrames.value.length) void ensureTimelineThumbnails(true);
+      if (durationChanged || !thumbnailFrames.value.length) {
+        void nextTick().then(() => {
+          fitTimeline();
+          scheduleThumbnailRefresh(true);
+        });
+      }
     }
+    if (transitionPreviewing.value) {
+      isPlaying.value = !(transitionVideoRef.value?.paused ?? true);
+      return;
+    }
+    if (transitionPreviewLoading.value) return;
     const time = player.getCurrentTime();
     if (!Number.isFinite(time)) return;
     currentSourceTime.value = time;
     isPlaying.value = player.isPlaying();
     updatePlayheadPosition();
     const segment = activeSegment.value;
-    if (!segment || !player.isPlaying()) return;
+    if (!segment || !player.isPlaying() || transitionPreviewing.value || transitionPreviewLoading.value) return;
     if (time < segment.start - 0.05) {
       player.setCurrentTime(segment.start);
+      return;
+    }
+    const transitionHalf = segment.transition ? segment.transition.duration / 2 : 0;
+    if (segment.transition && time >= segment.end - transitionHalf - 0.04) {
+      void playTransitionPreview(activeSegmentIndex.value, true);
       return;
     }
     if (time >= segment.end - 0.04) {
@@ -285,63 +555,203 @@ const startPolling = () => {
   }, 100);
 };
 
-const desiredThumbnailTimes = (segment: I_videoEditSegment) => {
-  const segmentDuration = segment.end - segment.start;
-  const count = segments.value.length > 48
-    ? (segment.id === activeSegmentId.value ? 1 : 0)
-    : Math.max(1, Math.round(segmentDuration / Math.max(editedDuration.value, 0.1) * 18));
-  return Array.from({ length: count }, (_, index) =>
-    segment.start + segmentDuration * (index + 0.5) / count);
-};
-const ensureTimelineThumbnails = async (reset = false) => {
-  if (reset) revokeThumbnails();
-  const loadVersion = ++thumbnailLoadVersion;
-  const targets = segments.value.flatMap(segment => {
-    const count = Math.max(1, desiredThumbnailTimes(segment).length);
-    const tolerance = Math.max(0.03, (segment.end - segment.start) / count * 0.2);
-    return desiredThumbnailTimes(segment).map(time => ({ time, tolerance }));
+const desiredThumbnailTimes = () => {
+  if (!segments.value.length) return [];
+  if (segments.value.length > 160) {
+    const active = activeSegment.value;
+    const ordered = active
+      ? [active, ...segments.value.filter(item => item.id !== active.id)]
+      : segments.value;
+    return ordered.slice(0, 160).map(segment => (segment.start + segment.end) / 2);
+  }
+  const counts = segments.value.map(segment => Math.max(
+    1,
+    Math.ceil((segment.end - segment.start) * timelinePixelsPerSecond.value / 140),
+  ));
+  let total = counts.reduce((sum, count) => sum + count, 0);
+  while (total > 160) {
+    let largestIndex = -1;
+    for (let index = 0; index < counts.length; index++) {
+      if (counts[index] > 1 && (largestIndex < 0 || counts[index] > counts[largestIndex])) {
+        largestIndex = index;
+      }
+    }
+    if (largestIndex < 0) break;
+    counts[largestIndex]--;
+    total--;
+  }
+  return segments.value.flatMap((segment, segmentIndex) => {
+    const duration = segment.end - segment.start;
+    const count = counts[segmentIndex];
+    return Array.from({ length: count }, (_, index) =>
+      segment.start + duration * (index + 0.5) / count);
   });
-  const missingTimes = targets
-    .filter(target => !thumbnailFrames.value.some(frame => Math.abs(frame.time - target.time) <= target.tolerance))
-    .map(target => target.time);
-  for (let index = 0; index < missingTimes.length; index += 3) {
-    const batch = missingTimes.slice(index, index + 3);
-    const results = await Promise.all(batch.map(async time => {
-      const result = await videoTranscodeServer.thumbnail(props.task.id, time);
-      if (!result.status || !result.data) return undefined;
-      return { time, url: URL.createObjectURL(result.data) } satisfies ThumbnailFrame;
-    }));
-    const loaded = results.filter((item): item is ThumbnailFrame => Boolean(item));
-    if (loadVersion !== thumbnailLoadVersion) {
-      loaded.forEach(item => URL.revokeObjectURL(item.url));
+};
+
+const thumbnailCacheKey = (times: number[]) => times.map(time => time.toFixed(3)).join(',');
+const refreshTimelineThumbnails = async () => {
+  const times = desiredThumbnailTimes();
+  if (!times.length) return;
+  const loadVersion = ++thumbnailLoadVersion;
+  thumbnailAbortController?.abort();
+  thumbnailAbortController = undefined;
+  const key = thumbnailCacheKey(times);
+  const cached = thumbnailCache.get(key);
+  if (cached) {
+    thumbnailFrames.value = cached;
+    thumbnailLoading.value = false;
+    thumbnailLoadingCount.value = 0;
+    return;
+  }
+  const controller = new AbortController();
+  thumbnailAbortController = controller;
+  thumbnailLoading.value = true;
+  thumbnailLoadingCount.value = times.length;
+  try {
+    const result = await videoTranscodeServer.thumbnails(props.task.id, times, controller.signal);
+    if (loadVersion !== thumbnailLoadVersion || controller.signal.aborted) return;
+    if (!result.status) {
+      ElMessage.error(result.msg || '生成时间轴缩略图失败');
       return;
     }
-    thumbnailFrames.value.push(...loaded);
-    thumbnailFrames.value.sort((left, right) => left.time - right.time);
+    const frames = result.data.filter(item => item.url).sort((left, right) => left.time - right.time);
+    thumbnailFrames.value = frames;
+    thumbnailCache.set(key, frames);
+    while (thumbnailCache.size > 4) {
+      const oldest = thumbnailCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      thumbnailCache.delete(oldest);
+    }
+  } finally {
+    if (loadVersion === thumbnailLoadVersion) {
+      thumbnailLoading.value = false;
+      thumbnailLoadingCount.value = 0;
+    }
   }
 };
 
+const ensureTimelineThumbnails = async (reset = false) => {
+  if (reset) {
+    thumbnailCache.clear();
+    thumbnailFrames.value = [];
+  }
+  await refreshTimelineThumbnails();
+};
+const scheduleThumbnailRefresh = (immediate = false) => {
+  window.clearTimeout(thumbnailRefreshTimer);
+  if (immediate) {
+    void ensureTimelineThumbnails();
+    return;
+  }
+  thumbnailRefreshTimer = window.setTimeout(() => void ensureTimelineThumbnails(), 320);
+};
 const revokeThumbnails = () => {
+  window.clearTimeout(thumbnailRefreshTimer);
+  thumbnailAbortController?.abort();
+  thumbnailAbortController = undefined;
   thumbnailLoadVersion++;
-  thumbnailFrames.value.forEach(item => URL.revokeObjectURL(item.url));
+  thumbnailLoading.value = false;
+  thumbnailFrames.value.forEach(item => {
+    if (item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
+  });
   thumbnailFrames.value = [];
+  thumbnailCache.clear();
 };
 const framesForSegment = (segment: I_videoEditSegment) => {
-  const candidates = thumbnailFrames.value.filter(frame => frame.time >= segment.start && frame.time <= segment.end);
-  if (!candidates.length) return [];
-  const used = new Set<string>();
-  return desiredThumbnailTimes(segment).flatMap(time => {
-    const nearest = candidates
-      .filter(frame => !used.has(frame.url))
-      .sort((left, right) => Math.abs(left.time - time) - Math.abs(right.time - time))[0];
-    if (!nearest) return [];
-    used.add(nearest.url);
-    return [nearest];
-  });
+  return thumbnailFrames.value.filter(frame => frame.time >= segment.start && frame.time <= segment.end);
 };
 const segmentStyle = (segment: I_videoEditSegment) => ({
-  width: `${Math.max(4, (segment.end - segment.start) / Math.max(editedDuration.value, 0.1) * 100)}%`,
+  width: `${Math.max(8, (segment.end - segment.start) * timelinePixelsPerSecond.value)}px`,
+  flex: '0 0 auto',
 });
+
+const clampTimelineZoom = (value: number) => Math.min(
+  timelineMaxPixelsPerSecond,
+  Math.max(timelineMinPixelsPerSecond, value),
+);
+const timelineAnchorAt = (clientX: number) => {
+  const track = timelineTrackRef.value;
+  const viewport = timelineViewportRef.value;
+  if (!track || !viewport) return undefined;
+  const elements = Array.from(track.querySelectorAll<HTMLElement>('.timeline-segment'));
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let ratio = 0;
+  elements.forEach((element, index) => {
+    const rect = element.getBoundingClientRect();
+    const clampedX = Math.min(rect.right, Math.max(rect.left, clientX));
+    const distance = Math.abs(clientX - clampedX);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+      ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(rect.width, 1)));
+    }
+  });
+  return {
+    index: bestIndex,
+    ratio,
+    viewportOffset: clientX - viewport.getBoundingClientRect().left,
+  };
+};
+const setTimelineZoom = (value: number, anchorClientX?: number) => {
+  const viewport = timelineViewportRef.value;
+  if (!viewport) return;
+  const clientX = anchorClientX ?? viewport.getBoundingClientRect().left + viewport.clientWidth / 2;
+  const anchor = timelineAnchorAt(clientX);
+  const nextValue = clampTimelineZoom(value);
+  if (Math.abs(nextValue - timelinePixelsPerSecond.value) < 0.001) return;
+  timelinePixelsPerSecond.value = nextValue;
+  scheduleThumbnailRefresh();
+  void nextTick(() => {
+    if (anchor) {
+      const element = timelineTrackRef.value
+        ?.querySelectorAll<HTMLElement>('.timeline-segment')[anchor.index];
+      if (element) {
+        viewport.scrollLeft = element.offsetLeft + anchor.ratio * element.offsetWidth - anchor.viewportOffset;
+      }
+    }
+    updatePlayheadPosition();
+    updateTimelineRuler();
+  });
+};
+const currentPlayheadClientX = () => {
+  const element = timelineTrackRef.value
+    ?.querySelectorAll<HTMLElement>('.timeline-segment')[activeSegmentIndex.value];
+  const segment = activeSegment.value;
+  if (!element || !segment) return undefined;
+  const rect = element.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0,
+    (currentSourceTime.value - segment.start) / Math.max(segment.end - segment.start, 0.001)));
+  return rect.left + ratio * rect.width;
+};
+const zoomTimeline = (factor: number) => setTimelineZoom(
+  timelinePixelsPerSecond.value * factor,
+  currentPlayheadClientX(),
+);
+const onTimelineWheel = (event: WheelEvent) => {
+  if (!event.deltaY) return;
+  event.preventDefault();
+  setTimelineZoom(
+    timelinePixelsPerSecond.value * Math.pow(1.2, -event.deltaY / 100),
+    event.clientX,
+  );
+};
+const fitTimeline = () => {
+  const viewport = timelineViewportRef.value;
+  if (!viewport || editedDuration.value <= 0) return;
+  const transitionCount = Math.max(0, segments.value.length - 1);
+  const childCount = segments.value.length + transitionCount;
+  const fixedWidth = 28 + transitionCount * 58 + Math.max(0, childCount - 1) * 4;
+  timelinePixelsPerSecond.value = clampTimelineZoom(
+    Math.max(1, viewport.clientWidth - fixedWidth) / editedDuration.value,
+  );
+  viewport.scrollLeft = 0;
+  scheduleThumbnailRefresh();
+  void nextTick(() => {
+    updatePlayheadPosition();
+    updateTimelineRuler();
+  });
+};
 const seekToSegment = (segment?: I_videoEditSegment, at?: number) => {
   if (!segment) return;
   activeSegmentId.value = segment.id;
@@ -366,6 +776,43 @@ const updatePlayheadPosition = () => {
   const ratio = Math.max(0, Math.min(1,
     (currentSourceTime.value - segment.start) / Math.max(segment.end - segment.start, 0.001)));
   playheadLeft.value = element.offsetLeft + ratio * element.offsetWidth;
+};
+const outputTimeAtClientX = (clientX: number) => {
+  const elements = Array.from(
+    timelineTrackRef.value?.querySelectorAll<HTMLElement>('.timeline-segment') || [],
+  );
+  let elapsed = 0;
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index];
+    const segment = segments.value[index];
+    if (!segment) break;
+    const duration = segment.end - segment.start;
+    const rect = element.getBoundingClientRect();
+    if (clientX <= rect.left) return elapsed;
+    if (clientX < rect.right) {
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(rect.width, 1)));
+      return elapsed + duration * ratio;
+    }
+    elapsed += duration;
+  }
+  return editedDuration.value;
+};
+const updateTimelineRuler = () => {
+  const viewport = timelineViewportRef.value;
+  if (!viewport || !segments.value.length) {
+    timelineVisibleStart.value = 0;
+    timelineVisibleMiddle.value = 0;
+    timelineVisibleEnd.value = 0;
+    return;
+  }
+  const rect = viewport.getBoundingClientRect();
+  timelineVisibleStart.value = outputTimeAtClientX(rect.left);
+  timelineVisibleMiddle.value = outputTimeAtClientX(rect.left + rect.width / 2);
+  timelineVisibleEnd.value = outputTimeAtClientX(rect.right);
+};
+const handleEditorResize = () => {
+  updatePlayheadPosition();
+  updateTimelineRuler();
 };
 const seekFromPointer = (clientX: number) => {
   const track = timelineTrackRef.value;
@@ -406,14 +853,30 @@ const startPlayheadDrag = (event: PointerEvent) => {
   window.addEventListener('pointerup', stopPlayheadDrag, { once: true });
 };
 const togglePlayback = () => {
+  if (transitionPreviewing.value) {
+    const preview = transitionVideoRef.value;
+    if (!preview) return;
+    if (preview.paused) {
+      void preview.play();
+      isPlaying.value = true;
+    } else {
+      preview.pause();
+      isPlaying.value = false;
+    }
+    return;
+  }
   const player = videoPlayRef.value;
-  const segment = activeSegment.value;
-  if (!player || !segment) return;
+  if (!player) return;
   if (player.isPlaying()) {
     player.pause();
     isPlaying.value = false;
     return;
   }
+  if (currentOutputTime.value >= editedDuration.value - 0.02) {
+    seekToSegment(segments.value[0]);
+  }
+  const segment = activeSegment.value;
+  if (!segment) return;
   if (currentSourceTime.value < segment.start || currentSourceTime.value >= segment.end - 0.04) {
     seekToSegment(segment);
   }
@@ -421,7 +884,189 @@ const togglePlayback = () => {
   isPlaying.value = true;
 };
 
+const transitionShortLabel = (segment: I_videoEditSegment) => {
+  if (!segment.transition) return '转场';
+  return transitionEffects.find(effect => effect.value === segment.transition?.type)?.short || '转场';
+};
+const transitionMaxDuration = (index: number) => {
+  const current = segments.value[index];
+  const next = segments.value[index + 1];
+  if (!current || !next) return 0;
+  const incomingHalf = index > 0 ? (segments.value[index - 1].transition?.duration || 0) / 2 : 0;
+  const nextOutgoingHalf = (next.transition?.duration || 0) / 2;
+  const currentAvailable = current.end - current.start - incomingHalf - 0.05;
+  const nextAvailable = next.end - next.start - nextOutgoingHalf - 0.05;
+  return Math.max(0, Math.min(3, currentAvailable * 2, nextAvailable * 2));
+};
+const setTransitionType = (index: number, type: string) => {
+  const next = cloneSegments(segments.value);
+  const segment = next[index];
+  if (!segment || index >= next.length - 1) return;
+  if (!type) {
+    segment.transition = undefined;
+    commitChange(next);
+    return;
+  }
+  const maximum = transitionMaxDuration(index);
+  if (maximum < 0.1) return ElMessage.warning('相邻片段太短，无法添加转场');
+  segment.transition = {
+    type,
+    duration: Math.min(segment.transition?.duration || 1, maximum),
+    audioFade: segment.transition?.audioFade || false,
+  };
+  commitChange(next);
+};
+const setTransitionDuration = (index: number, value: number) => {
+  if (!Number.isFinite(value)) return;
+  const next = cloneSegments(segments.value);
+  const transition = next[index]?.transition;
+  if (!transition) return;
+  transition.duration = Math.max(0.1, Math.min(value, transitionMaxDuration(index)));
+  commitChange(next);
+};
+const setTransitionAudioFade = (index: number, value: boolean) => {
+  const next = cloneSegments(segments.value);
+  const transition = next[index]?.transition;
+  if (!transition) return;
+  transition.audioFade = value;
+  commitChange(next);
+};
+const transitionContext = (index: number) => {
+  const left = segments.value[index];
+  const right = segments.value[index + 1];
+  const transition = left?.transition;
+  if (!left || !right || !transition) return undefined;
+  const half = transition.duration / 2;
+  const lead = Math.min(0.75, Math.max(0, left.end - left.start - half));
+  const tail = Math.min(0.75, Math.max(0, right.end - right.start - half));
+  return { left, right, transition, half, lead, tail };
+};
+const transitionPreviewKey = (index: number) => {
+  const context = transitionContext(index);
+  return context ? JSON.stringify({
+    left: context.left,
+    right: context.right,
+  }) : '';
+};
+const waitForPreviewMetadata = async (video: HTMLVideoElement) => {
+  if (video.readyState >= 1) return;
+  await new Promise<void>((resolve, reject) => {
+    const loaded = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error('浏览器无法加载转场预览')); };
+    const cleanup = () => {
+      video.removeEventListener('loadedmetadata', loaded);
+      video.removeEventListener('error', failed);
+    };
+    video.addEventListener('loadedmetadata', loaded, { once: true });
+    video.addEventListener('error', failed, { once: true });
+  });
+};
+const playTransitionPreview = async (index: number, automatic: boolean) => {
+  const context = transitionContext(index);
+  if (!context || transitionPreviewLoading.value || transitionPreviewing.value) return;
+  const requestID = ++transitionPreviewRequestID;
+  transitionPreviewAbortController?.abort();
+  const controller = new AbortController();
+  transitionPreviewAbortController = controller;
+  transitionPreviewLoading.value = true;
+  transitionPreviewIndex.value = index;
+  transitionPreviewAuto.value = automatic;
+  videoPlayRef.value?.pause();
+  isPlaying.value = false;
+  try {
+    const key = transitionPreviewKey(index);
+    let url = transitionPreviewCache.get(key);
+    if (!url) {
+      const result = await videoTranscodeServer.transitionPreview(
+        props.task.id,
+        cloneSegments([context.left])[0],
+        cloneSegments([context.right])[0],
+        controller.signal,
+      );
+      if (!result.status) throw new Error(result.msg || '生成转场预览失败');
+      url = URL.createObjectURL(result.data);
+      transitionPreviewCache.set(key, url);
+    }
+    if (requestID !== transitionPreviewRequestID || controller.signal.aborted) return;
+    transitionPreviewUrl.value = url;
+    transitionPreviewing.value = true;
+    transitionPreviewStopAt = automatic
+      ? context.lead + context.transition.duration
+      : Number.POSITIVE_INFINITY;
+    await nextTick();
+    const preview = transitionVideoRef.value;
+    if (!preview) throw new Error('转场预览播放器未就绪');
+    preview.load();
+    await waitForPreviewMetadata(preview);
+    applyVolumeToPlayers();
+    preview.currentTime = automatic ? context.lead : 0;
+    await preview.play();
+    isPlaying.value = true;
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    const message = error instanceof Error ? error.message : '生成转场预览失败';
+    ElMessage.error(message);
+    if (automatic) {
+      seekToSegment(context.right, context.right.start);
+      void videoPlayRef.value?.play();
+      isPlaying.value = true;
+    }
+  } finally {
+    if (requestID === transitionPreviewRequestID) transitionPreviewLoading.value = false;
+  }
+};
+const handleTransitionPreviewTimeUpdate = () => {
+  const preview = transitionVideoRef.value;
+  const context = transitionContext(transitionPreviewIndex.value);
+  if (!preview || !context) return;
+  const previewTime = preview.currentTime;
+  const midpoint = context.lead + context.half;
+  if (previewTime < midpoint) {
+    activeSegmentId.value = context.left.id;
+    currentSourceTime.value = context.left.end - context.half - context.lead + previewTime;
+  } else {
+    activeSegmentId.value = context.right.id;
+    currentSourceTime.value = context.right.start + previewTime - midpoint;
+  }
+  updatePlayheadPosition();
+  if (transitionPreviewAuto.value && previewTime >= transitionPreviewStopAt - 0.025) {
+    finishTransitionPreview();
+  }
+};
+const finishTransitionPreview = () => {
+  const context = transitionContext(transitionPreviewIndex.value);
+  const automatic = transitionPreviewAuto.value;
+  if (!context) return stopTransitionPreview(false);
+  const resumeAt = context.right.start + context.half + (automatic ? 0 : context.tail);
+  stopTransitionPreview(false);
+  seekToSegment(context.right, Math.min(context.right.end, resumeAt));
+  if (automatic) {
+    void videoPlayRef.value?.play();
+    isPlaying.value = true;
+  }
+};
+const stopTransitionPreview = (cancelRequest = true) => {
+  if (cancelRequest) {
+    transitionPreviewRequestID++;
+    transitionPreviewAbortController?.abort();
+  }
+  transitionVideoRef.value?.pause();
+  transitionPreviewing.value = false;
+  transitionPreviewLoading.value = false;
+  transitionPreviewAuto.value = false;
+  transitionPreviewIndex.value = -1;
+  transitionPreviewStopAt = Number.POSITIVE_INFINITY;
+  isPlaying.value = false;
+};
+const revokeTransitionPreviews = () => {
+  stopTransitionPreview();
+  transitionPreviewCache.forEach(url => URL.revokeObjectURL(url));
+  transitionPreviewCache.clear();
+  transitionPreviewUrl.value = '';
+};
+
 const commitChange = (next: I_videoEditSegment[]) => {
+  if (transitionPreviewing.value || transitionPreviewLoading.value) stopTransitionPreview();
   undoStack.value.push(cloneSegments(segments.value));
   redoStack.value = [];
   segments.value = next;
@@ -430,7 +1075,8 @@ const commitChange = (next: I_videoEditSegment[]) => {
   }
   void nextTick().then(() => {
     updatePlayheadPosition();
-    void ensureTimelineThumbnails();
+    updateTimelineRuler();
+    scheduleThumbnailRefresh();
   });
 };
 const splitCurrentSegment = () => {
@@ -438,8 +1084,13 @@ const splitCurrentSegment = () => {
   const index = activeSegmentIndex.value;
   const segment = activeSegment.value;
   const splitAt = Math.round(currentSourceTime.value * 1000) / 1000;
-  const left = { ...segment, id: makeSegmentID(), end: splitAt };
-  const right = { ...segment, id: makeSegmentID(), start: splitAt };
+  const left = { ...segment, id: makeSegmentID(), end: splitAt, transition: undefined };
+  const right = {
+    ...segment,
+    id: makeSegmentID(),
+    start: splitAt,
+    transition: segment.transition ? { ...segment.transition } : undefined,
+  };
   const next = cloneSegments(segments.value);
   next.splice(index, 1, left, right);
   commitChange(next);
@@ -450,6 +1101,7 @@ const removeCurrentSegment = () => {
   const index = activeSegmentIndex.value;
   const next = cloneSegments(segments.value);
   next.splice(index, 1);
+  if (index > 0) next[index - 1].transition = undefined;
   commitChange(next);
   seekToSegment(next[Math.min(index, next.length - 1)]);
 };
@@ -462,18 +1114,20 @@ const resetPlan = () => {
 const undo = () => {
   const previous = undoStack.value.pop();
   if (!previous) return;
+  stopTransitionPreview();
   redoStack.value.push(cloneSegments(segments.value));
   segments.value = previous;
   seekToSegment(segments.value.find(item => item.id === activeSegmentId.value) || segments.value[0]);
-  void ensureTimelineThumbnails();
+  scheduleThumbnailRefresh();
 };
 const redo = () => {
   const next = redoStack.value.pop();
   if (!next) return;
+  stopTransitionPreview();
   undoStack.value.push(cloneSegments(segments.value));
   segments.value = next;
   seekToSegment(segments.value.find(item => item.id === activeSegmentId.value) || segments.value[0]);
-  void ensureTimelineThumbnails();
+  scheduleThumbnailRefresh();
 };
 const startDrag = (event: DragEvent, index: number) => {
   dragIndex.value = index;
@@ -485,9 +1139,12 @@ const dropSegment = (targetIndex: number) => {
   dragIndex.value = -1;
   if (sourceIndex < 0 || sourceIndex === targetIndex) return;
   const next = cloneSegments(segments.value);
+  const hadTransitions = next.some(item => item.transition);
   const [moved] = next.splice(sourceIndex, 1);
   next.splice(targetIndex, 0, moved);
+  next.forEach(item => { item.transition = undefined; });
   commitChange(next);
+  if (hadTransitions) ElMessage.info('片段顺序已变化，原转场已清除，请重新设置');
 };
 
 const savePlan = async () => {
@@ -560,9 +1217,11 @@ const requestClose = async () => {
 };
 const handleClosed = () => {
   window.clearInterval(pollTimer);
+  window.clearTimeout(thumbnailRefreshTimer);
   videoPlayRef.value?.releaseSource();
+  revokeTransitionPreviews();
   stopPlayheadDrag();
-  window.removeEventListener('resize', updatePlayheadPosition);
+  window.removeEventListener('resize', handleEditorResize);
   revokeThumbnails();
   emit('closed');
 };
@@ -583,9 +1242,11 @@ const formatTime = (seconds: number) => {
 
 onBeforeUnmount(() => {
   window.clearInterval(pollTimer);
+  window.clearTimeout(thumbnailRefreshTimer);
   videoPlayRef.value?.releaseSource();
+  revokeTransitionPreviews();
   stopPlayheadDrag();
-  window.removeEventListener('resize', updatePlayheadPosition);
+  window.removeEventListener('resize', handleEditorResize);
   revokeThumbnails();
 });
 </script>
@@ -593,6 +1254,7 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 .editor-header,
 .editor-footer,
+.player-controls,
 .preview-status,
 .timeline-toolbar,
 .timeline-ruler {
@@ -627,21 +1289,66 @@ onBeforeUnmount(() => {
   flex-direction: column;
   background: #121212;
 }
+.preview-stage {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+}
 .editor-player {
   flex: 1;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
-.preview-status {
-  min-height: 40px;
-  flex-shrink: 0;
-  gap: 20px;
+.transition-player {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  object-fit: contain;
+  background: #000;
+}
+.player-controls {
+  min-height: 48px;
+  flex: 0 0 auto;
+  gap: 10px;
   padding: 0 14px;
   color: #d6d6d6;
-  font-size: 12px;
   background: #1f1f1f;
 }
-.preview-tip { margin-left: auto; color: #909399; }
+.player-controls :deep(.el-button.is-circle) {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-color: #4b4b4b;
+  color: #e8e8e8;
+  background: #2a2a2a;
+}
+.player-controls :deep(.el-button.is-circle:hover) {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary-light-3);
+}
+.volume-slider { flex: 0 0 100px; width: 100px; }
+.output-slider { min-width: 120px; flex: 1 1 auto; }
+.time-label {
+  min-width: 116px;
+  color: #d6d6d6;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+.player-controls :deep(.el-slider__runway) { background-color: #555; }
+.preview-status {
+  flex: 0 0 auto;
+  gap: 10px;
+  color: #d6d6d6;
+  font-size: 12px;
+}
+.preview-tip { color: #909399; white-space: nowrap; }
 .timeline-panel {
   flex: 0 0 auto;
   display: flex;
@@ -651,6 +1358,8 @@ onBeforeUnmount(() => {
 }
 .timeline-toolbar { gap: 4px; flex-shrink: 0; }
 .timeline-toolbar > span { margin-left: auto; color: var(--el-text-color-secondary); font-size: 12px; }
+.timeline-zoom-controls { margin-left: 8px; }
+.zoom-value { align-self: center; min-width: 72px; color: var(--el-text-color-secondary); text-align: center; }
 .timeline-ruler {
   justify-content: space-between;
   margin-top: 8px;
@@ -659,22 +1368,31 @@ onBeforeUnmount(() => {
   font-size: 11px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
+.timeline-viewport-shell { position: relative; }
+.timeline-viewport {
+  width: 100%;
+  min-height: 100px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
 .timeline-track {
   position: relative;
   min-height: 100px;
+  width: max-content;
+  min-width: 100%;
   box-sizing: border-box;
-  flex-shrink: 0;
   display: flex;
   align-items: stretch;
   gap: 4px;
-  overflow-x: auto;
   padding: 4px 14px 12px;
-  scrollbar-width: thin;
 }
 .timeline-segment {
   position: relative;
-  min-width: 78px;
+  min-width: 8px;
   height: 70px;
+  box-sizing: border-box;
   flex: 0 0 auto;
   overflow: hidden;
   border: 2px solid transparent;
@@ -689,8 +1407,8 @@ onBeforeUnmount(() => {
 .segment-thumbnails { position: absolute; inset: 0; display: flex; overflow: hidden; }
 .segment-thumbnails img {
   width: 0;
-  min-width: 70px;
-  max-width: 240px;
+  min-width: 0;
+  max-width: none;
   flex: 1 1 0;
   object-fit: cover;
 }
@@ -754,6 +1472,72 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgba(255, 255, 255, .8);
 }
 .timeline-playhead.dragging .playhead-handle { transform: scale(1.12); }
+.transition-node {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  flex: 0 0 58px;
+  width: 58px;
+  height: 48px;
+  padding: 3px;
+  border: 1px dashed var(--el-border-color-darker);
+  border-radius: 8px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.transition-node:hover { border-color: var(--el-color-primary); color: var(--el-color-primary); }
+.transition-node.active {
+  border-style: solid;
+  border-color: var(--el-color-primary);
+  color: #fff;
+  background: var(--el-color-primary);
+}
+.transition-node span {
+  max-width: 50px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transition-node small { margin-top: 2px; font-size: 10px; }
+.transition-editor { display: grid; gap: 12px; }
+.transition-duration-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.transition-duration-row :deep(.el-input-number) { width: 100%; }
+.transition-audio-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: center;
+}
+.transition-audio-row small { grid-column: 1 / -1; color: var(--el-text-color-secondary); }
+.timeline-thumbnail-loading {
+  position: absolute;
+  z-index: 8;
+  top: 9px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100% - 32px);
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 16px;
+  color: #fff;
+  background: rgba(24, 28, 36, .88);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
 .timeline-panel .el-alert { margin-top: auto; flex-shrink: 0; }
 .editor-footer { justify-content: space-between; }
 .editor-footer > span { color: var(--el-text-color-secondary); }
@@ -763,6 +1547,9 @@ onBeforeUnmount(() => {
 .output-file-name { width: 280px; }
 @media (max-width: 900px) {
   .editor-layout { min-height: 520px; }
+  .player-controls { gap: 7px; padding: 0 9px; }
+  .volume-slider { flex-basis: 76px; width: 76px; }
+  .time-label { min-width: 100px; }
   .preview-status { gap: 8px; }
   .preview-tip { display: none; }
   .timeline-toolbar { flex-wrap: wrap; }

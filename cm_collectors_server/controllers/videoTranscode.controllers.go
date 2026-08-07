@@ -72,6 +72,32 @@ func (VideoTranscode) Thumbnail(c *gin.Context) {
 	c.Data(http.StatusOK, "image/jpeg", data)
 }
 
+func (VideoTranscode) ThumbnailBatch(c *gin.Context) {
+	var request processors.VideoTranscodeThumbnailBatchRequest
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	data, err := (processors.VideoTranscode{}).ThumbnailBatch(c.Request.Context(), c.Param("id"), request)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(data, c)
+}
+
+func (VideoTranscode) TransitionPreview(c *gin.Context) {
+	var request processors.VideoTranscodeTransitionPreviewRequest
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	path, err := (processors.VideoTranscode{}).TransitionPreview(c.Request.Context(), c.Param("id"), request)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.Header("Content-Type", "video/webm")
+	c.File(path)
+}
+
 func (VideoTranscode) Start(c *gin.Context) {
 	var request processors.VideoTranscodeStartRequest
 	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {

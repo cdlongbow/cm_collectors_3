@@ -7,7 +7,7 @@
         <el-button @click="batchDeleteTagHandle">批量删除标签</el-button>
         <el-button @click="batchAddPerformerHandle">批量添加演员</el-button>
         <el-button @click="batchSetStarsHandle">批量设置评星</el-button>
-        <el-button @click="batchAddTranscodeHandle">批量加入转码</el-button>
+        <el-button @click="batchAddTranscodeHandle">批量加入转码与剪辑</el-button>
       </el-button-group>
     </div>
     <div class="table-container">
@@ -159,20 +159,20 @@ const batchAddTranscodeHandle = async () => {
   if (!tableRef.value) return;
   const selectedResources = tableRef.value.getSelectionRows() as I_resource[];
   if (selectedResources.length === 0) {
-    ElMessage.error('请选择要加入转码列表的资源');
+    ElMessage.error('请选择要加入转码与剪辑列表的资源');
     return;
   }
   try {
     await ElMessageBox.confirm(
-      `将选中的 ${selectedResources.length} 个资源下的全部视频加入转码列表，重复项和不存在的文件会自动跳过。`,
-      '批量加入视频转码列表',
+      `将选中的 ${selectedResources.length} 个资源下的全部视频加入转码与剪辑列表，重复项和不存在的文件会自动跳过。`,
+      '批量加入转码与剪辑列表',
       { type: 'warning' },
     );
     const result = await videoTranscodeServer.add({
       resourceIds: selectedResources.map(item => item.id),
     });
     if (!result.status) {
-      ElMessage.error(result.msg || '批量加入转码列表失败');
+      ElMessage.error(result.msg || '批量加入转码与剪辑列表失败');
       return;
     }
     const skipped = result.data.skippedDuplicate + result.data.skippedMissing;

@@ -1,6 +1,8 @@
 import request, { requestBlob } from '@/assets/request';
 import type {
   I_videoEditPlan,
+  I_videoEditSegment,
+  I_videoTimelineThumbnail,
   I_videoTranscodeAddResult,
   I_videoTranscodeConfig,
   I_videoTranscodeEditPlanResult,
@@ -50,6 +52,23 @@ export const videoTranscodeServer = {
     url: `${routerGroupUri}/thumbnail/${id}`,
     method: 'get',
     params: { at },
+  }),
+  thumbnails: async (id: string, times: number[], signal?: AbortSignal) => request<I_videoTimelineThumbnail[]>({
+    url: `${routerGroupUri}/thumbnails/${id}`,
+    method: 'post',
+    data: { times },
+    signal,
+  }),
+  transitionPreview: async (
+    id: string,
+    left: I_videoEditSegment,
+    right: I_videoEditSegment,
+    signal?: AbortSignal,
+  ) => requestBlob({
+    url: `${routerGroupUri}/transitionPreview/${id}`,
+    method: 'post',
+    data: { left, right },
+    signal,
   }),
   start: async (ids: string[] = [], enableGpu = false) => request<I_videoTranscodeStartResult>({
     url: `${routerGroupUri}/start`,

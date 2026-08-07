@@ -5,6 +5,7 @@ import (
 	processorsffmpeg "cm_collectors_server/processorsFFmpeg"
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -507,6 +508,84 @@ func TestNormalizeVideoEditPlanRejectsOverlap(t *testing.T) {
 	}
 }
 
+func TestNormalizeVideoEditPlanValidatesTransitions(t *testing.T) {
+	plan := VideoEditPlan{Version: 1, Segments: []VideoEditSegment{
+		{ID: "one", Start: 0, End: 5, Transition: &VideoTransition{Type: "dissolve", Duration: 2, AudioFade: true}},
+		{ID: "two", Start: 10, End: 15},
+	}}
+	normalized, duration, _, err := normalizeVideoEditPlan(plan, 20)
+	if err != nil {
+		t.Fatalf("valid transition should pass: %v", err)
+	}
+	if duration != 10 || normalized.Segments[0].Transition == nil ||
+		!normalized.Segments[0].Transition.AudioFade {
+		t.Fatalf("unexpected normalized transition plan: %#v", normalized)
+	}
+	plan.Segments[0].Transition.Type = "unknown"
+	if _, _, _, err := normalizeVideoEditPlan(plan, 20); err == nil {
+		t.Fatal("unsupported transition must be rejected")
+	}
+}
+
+func TestNormalizeVideoEditPlanRejectsTransitionsThatFillMiddleSegment(t *testing.T) {
+	plan := VideoEditPlan{Version: 1, Segments: []VideoEditSegment{
+		{ID: "one", Start: 0, End: 5, Transition: &VideoTransition{Type: "dissolve", Duration: 2}},
+		{ID: "two", Start: 10, End: 11.5, Transition: &VideoTransition{Type: "wipeleft", Duration: 2}},
+		{ID: "three", Start: 20, End: 25},
+	}}
+	if _, _, _, err := normalizeVideoEditPlan(plan, 30); err == nil {
+		t.Fatal("incoming and outgoing transition halves must leave normal segment space")
+	}
+}
+
+func TestNormalizeVideoEditPlanDropsLastSegmentTransition(t *testing.T) {
+	plan := VideoEditPlan{Version: 1, Segments: []VideoEditSegment{
+		{ID: "one", Start: 0, End: 5},
+		{ID: "two", Start: 10, End: 15, Transition: &VideoTransition{Type: "fade", Duration: 1}},
+	}}
+	normalized, _, _, err := normalizeVideoEditPlan(plan, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Segments[1].Transition != nil {
+		t.Fatal("last segment transition must be removed")
+	}
+}
+
+func TestCleanupVideoTransitionPreviewCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	now := time.Now()
+	writeCacheFile := func(name string, size int, modified time.Time) string {
+		t.Helper()
+		path := filepath.Join(cacheRoot, name)
+		if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	oldPath := writeCacheFile("old.webm", 6, now.Add(-48*time.Hour))
+	oldTemporaryPath := writeCacheFile("stale.tmp.webm", 6, now.Add(-2*time.Hour))
+	oldestRecentPath := writeCacheFile("recent-oldest.webm", 6, now.Add(-3*time.Hour))
+	preservePath := writeCacheFile("preserve.webm", 6, now.Add(-2*time.Hour))
+	newestPath := writeCacheFile("recent-newest.webm", 6, now.Add(-time.Hour))
+
+	cleanupVideoTransitionPreviewCache(cacheRoot, preservePath, now, 24*time.Hour, 12)
+
+	for _, removedPath := range []string{oldPath, oldTemporaryPath, oldestRecentPath} {
+		if _, err := os.Stat(removedPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected cache file to be removed: %s, err=%v", removedPath, err)
+		}
+	}
+	for _, keptPath := range []string{preservePath, newestPath} {
+		if _, err := os.Stat(keptPath); err != nil {
+			t.Fatalf("expected cache file to remain: %s, err=%v", keptPath, err)
+		}
+	}
+}
+
 func TestVideoTranscodeConfigForEditAppliesSafeDefaults(t *testing.T) {
 	config := DefaultVideoTranscodeConfig()
 	adjustedConfig, adjusted := videoTranscodeConfigForEdit(config)
@@ -533,19 +612,82 @@ func TestBuildVideoEditFilterGraphMapsVideoAndEveryAudioTrack(t *testing.T) {
 		{Index: 2, CodecType: "audio"},
 	}}
 	plan := VideoEditPlan{Version: 1, Segments: []VideoEditSegment{
-		{ID: "two", Start: 10, End: 20},
+		{ID: "two", Start: 10, End: 20, Transition: &VideoTransition{Type: "dissolve", Duration: 2, AudioFade: true}},
 		{ID: "one", Start: 0, End: 5},
 	}}
 	config := DefaultVideoTranscodeConfig()
 	config.VideoCodec = "h264"
 	config.AudioCodec = "aac"
 	graph, labels := buildVideoEditFilterGraph(0, info, plan, config)
-	for _, expected := range []string{"trim=start=10.000:end=20.000", "concat=n=2:v=1:a=0", "[0:1]atrim", "[0:2]atrim"} {
+	for _, expected := range []string{
+		"trim=start=10.000000:end=19.000000",
+		"xfade=transition=dissolve:duration=1.000000",
+		"concat=n=2:v=1:a=0",
+		"[0:1]atrim", "[0:2]atrim",
+		"afade=t=out:st=9.000000:d=1.000000",
+		"afade=t=in:st=0:d=1.000000",
+	} {
 		if !strings.Contains(graph, expected) {
 			t.Fatalf("filter graph missing %q: %s", expected, graph)
 		}
 	}
 	if len(labels) != 3 || labels[0] != "[vout]" {
 		t.Fatalf("unexpected output labels: %#v", labels)
+	}
+}
+
+func TestVideoTransitionFilterGraphProducesPlayableOutput(t *testing.T) {
+	ffmpegPath, err := (processorsffmpeg.FFmpeg{}).IsFFmpegAvailable()
+	if err != nil {
+		t.Skipf("FFmpeg unavailable: %v", err)
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "transition-source.mp4")
+	output := filepath.Join(dir, "transition-output.mp4")
+	generate := processorsffmpeg.CreateCommandContext(context.Background(), ffmpegPath,
+		"-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+		"-t", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", source,
+	)
+	if data, runErr := generate.CombinedOutput(); runErr != nil {
+		t.Fatalf("generate transition fixture: %v\n%s", runErr, data)
+	}
+	info, err := (processorsffmpeg.VideoInfo{}).GetVideoFormatInfo(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := (processorsffmpeg.VideoInfo{}).PrimaryVideoStream(info)
+	if primary == nil {
+		t.Fatal("generated fixture has no video stream")
+	}
+	plan := VideoEditPlan{Version: 1, Segments: []VideoEditSegment{
+		{ID: "one", Start: 0, End: 2, Transition: &VideoTransition{Type: "fade", Duration: 1}},
+		{ID: "two", Start: 2, End: 4, Transition: &VideoTransition{Type: "dissolve", Duration: 1, AudioFade: true}},
+		{ID: "three", Start: 4, End: 6},
+	}}
+	config := DefaultVideoTranscodeConfig()
+	config.VideoCodec = "h264"
+	config.AudioCodec = "aac"
+	graph, labels := buildVideoEditFilterGraph(primary.Index, info, plan, config)
+	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", source,
+		"-filter_complex", graph}
+	for _, label := range labels {
+		args = append(args, "-map", label)
+	}
+	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", output)
+	if data, runErr := processorsffmpeg.CreateCommandContext(context.Background(), ffmpegPath, args...).CombinedOutput(); runErr != nil {
+		t.Fatalf("render transition fixture: %v\n%s\nfilter=%s", runErr, data, graph)
+	}
+	outputInfo, err := (processorsffmpeg.VideoInfo{}).GetVideoFormatInfo(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputDuration := (processorsffmpeg.VideoInfo{}).GetVideoDuration(outputInfo)
+	if math.Abs(outputDuration-6) > 0.2 {
+		t.Fatalf("overlay transitions must preserve duration: got %.3f", outputDuration)
+	}
+	if countVideoTranscodeStreams(outputInfo, "audio") != 1 {
+		t.Fatal("transition output must preserve audio")
 	}
 }

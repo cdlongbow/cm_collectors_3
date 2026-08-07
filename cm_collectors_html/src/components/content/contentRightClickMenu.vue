@@ -116,7 +116,7 @@ const contentMenuItems_C = computed(() => {
         }
       },
       {
-        label: '加入视频转码列表',
+        label: '加入转码与剪辑列表',
         icon: 'VideoCamera',
         handler: async () => {
           try {
@@ -126,8 +126,8 @@ const contentMenuItems_C = computed(() => {
               return
             }
             await ElMessageBox.confirm(
-              `将资源下的 ${count} 个视频加入转码列表，系统会自动跳过重复项和不存在的文件。`,
-              '加入视频转码列表',
+              `将资源下的 ${count} 个视频加入转码与剪辑列表，系统会自动跳过重复项和不存在的文件。`,
+              '加入转码与剪辑列表',
               { type: 'warning' },
             )
             const result = await videoTranscodeServer.add({ resourceIds: [props.resource.id] })

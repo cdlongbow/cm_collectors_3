@@ -731,6 +731,9 @@ const isPlaying = (): boolean => {
 
 // 获取当前播放时间
 const getCurrentTime = (): number => {
+  if (isMobile()) {
+    return nativeVideoRef.value?.currentTime || 0;
+  }
   if (player.value) {
     return player.value.currentTime();
   }
@@ -739,6 +742,9 @@ const getCurrentTime = (): number => {
 
 // 获取视频总时长
 const getDuration = (): number => {
+  if (isMobile()) {
+    return nativeVideoRef.value?.duration || 0;
+  }
   if (player.value) {
     return player.value.duration();
   }
@@ -756,6 +762,10 @@ const getProgress = (): number => {
 
 // 设置播放位置
 const setCurrentTime = (time: number) => {
+  if (isMobile()) {
+    if (nativeVideoRef.value) nativeVideoRef.value.currentTime = time;
+    return;
+  }
   if (player.value) {
     player.value.currentTime(time);
   }
@@ -937,16 +947,23 @@ const setVideoSource = (
 }
 // 设置音量（0~1）
 const setVolume = (volumeLevel: number) => {
+  const validVolume = Math.min(1, Math.max(0, volumeLevel))
+  if (isMobile()) {
+    if (nativeVideoRef.value) nativeVideoRef.value.volume = validVolume
+    saveVolumeToStorage(validVolume)
+    return
+  }
   if (player.value) {
-    // 确保音量值在有效范围内
-    const validVolume = Math.min(1, Math.max(0, volumeLevel))
     player.value.volume(validVolume)
     // 触发音量变化事件，更新UI
     player.value.trigger('volumechange')
-    console.log('设置声音');
+    saveVolumeToStorage(validVolume)
   }
 }
 const getVolume = () => {
+  if (isMobile()) {
+    return nativeVideoRef.value?.volume ?? 0
+  }
   if (player.value) {
     return player.value.volume()
   }

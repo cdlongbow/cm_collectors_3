@@ -267,6 +267,8 @@ func AdminRouter(router *gin.Engine) {
 	routerGroup.PUT("videoTranscode/config", controllers.VideoTranscode{}.UpdateConfig)
 	routerGroup.PUT("videoTranscode/editPlan/:id", controllers.VideoTranscode{}.SaveEditPlan)
 	routerGroup.GET("videoTranscode/thumbnail/:id", controllers.VideoTranscode{}.Thumbnail)
+	routerGroup.POST("videoTranscode/thumbnails/:id", controllers.VideoTranscode{}.ThumbnailBatch)
+	routerGroup.POST("videoTranscode/transitionPreview/:id", controllers.VideoTranscode{}.TransitionPreview)
 	routerGroup.POST("videoTranscode/start", controllers.VideoTranscode{}.Start)
 	routerGroup.POST("videoTranscode/resetBatch", controllers.VideoTranscode{}.ResetBatch)
 	routerGroup.POST("videoTranscode/retryReplacement/:id", controllers.VideoTranscode{}.RetryReplacement)

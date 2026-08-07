@@ -36,6 +36,13 @@ export interface I_videoEditSegment {
   id: string;
   start: number;
   end: number;
+  transition?: I_videoTransition;
+}
+
+export interface I_videoTransition {
+  type: string;
+  duration: number;
+  audioFade?: boolean;
 }
 
 export interface I_videoEditPlan {
@@ -49,6 +56,11 @@ export interface I_videoTranscodeEditPlanResult {
   hasEdits: boolean;
   config: I_videoTranscodeConfig;
   configAdjusted: boolean;
+}
+
+export interface I_videoTimelineThumbnail {
+  time: number;
+  url: string;
 }
 
 export interface I_videoTranscodeTask {

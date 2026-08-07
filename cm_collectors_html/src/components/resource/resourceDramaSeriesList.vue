@@ -101,15 +101,15 @@ const addToTranscode = async (item: I_resourceDramaSeries) => {
   if (!store.appStoreData.displayAdminFn) return;
   try {
     await ElMessageBox.confirm(
-      `将“${getFinalPathSegment(item.src)}”加入视频转码列表？`,
-      '加入视频转码列表',
+      `将“${getFinalPathSegment(item.src)}”加入转码与剪辑列表？`,
+      '加入转码与剪辑列表',
       { type: 'warning' },
     );
     const result = await videoTranscodeServer.add({ dramaSeriesIds: [item.id] });
     if (result.status && result.data.added > 0) {
-      ElMessage.success('已加入视频转码列表');
+      ElMessage.success('已加入转码与剪辑列表');
     } else if (result.status && result.data.skippedDuplicate > 0) {
-      ElMessage.info('该视频已在转码列表中');
+      ElMessage.info('该视频已在转码与剪辑列表中');
     } else {
       ElMessage.error(result.msg || '视频文件不存在或无法加入');
     }

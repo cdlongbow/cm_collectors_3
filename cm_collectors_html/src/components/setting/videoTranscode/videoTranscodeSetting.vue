@@ -162,7 +162,7 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="转码列表为空，可在资源或分集上点击右键加入" />
+        <el-empty description="转码与剪辑列表为空，可在资源或分集上点击右键加入" />
       </template>
     </el-table>
 
