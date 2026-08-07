@@ -40,6 +40,9 @@ func TestResourcesFileSizeStatsUsesAllFilteredVideoResources(t *testing.T) {
 		{ID: "match-success", ResourcesID: "movie-match", Src: "one.mp4"},
 		{ID: "match-stale", ResourcesID: "movie-match", Src: "two.mp4"},
 		{ID: "match-missing", ResourcesID: "movie-match", Src: "three.mp4"},
+		{ID: "match-failed", ResourcesID: "movie-match", Src: "broken.mp4"},
+		{ID: "match-manual", ResourcesID: "movie-match", Src: "manual.mp4"},
+		{ID: "match-image", ResourcesID: "movie-match", Src: "cover.jpg", VideoMetadataExcluded: true},
 		{ID: "other-success", ResourcesID: "movie-other", Src: "four.mp4"},
 		{ID: "comic-success", ResourcesID: "comic-match", Src: "five.jpg"},
 		{ID: "link-success", ResourcesID: "link-match", Src: "https://example.com/video.mp4"},
@@ -51,6 +54,9 @@ func TestResourcesFileSizeStatsUsesAllFilteredVideoResources(t *testing.T) {
 	metadata := []ResourcesVideoMetadata{
 		{DramaSeriesID: "match-success", ProbeStatus: VideoMetadataStatusSuccess, MetadataVersion: 2, FileSize: 100},
 		{DramaSeriesID: "match-stale", ProbeStatus: VideoMetadataStatusStale, MetadataVersion: 0, FileSize: 200},
+		{DramaSeriesID: "match-failed", ProbeStatus: VideoMetadataStatusFailed, MetadataVersion: 2, FileSize: 300},
+		{DramaSeriesID: "match-manual", ProbeStatus: VideoMetadataStatusManual, MetadataVersion: 2, FileSize: 250},
+		{DramaSeriesID: "match-image", ProbeStatus: VideoMetadataStatusSuccess, MetadataVersion: 2, FileSize: 900},
 		{DramaSeriesID: "other-success", ProbeStatus: VideoMetadataStatusSuccess, MetadataVersion: 2, FileSize: 400},
 		{DramaSeriesID: "comic-success", ProbeStatus: VideoMetadataStatusSuccess, MetadataVersion: 2, FileSize: 500},
 		{DramaSeriesID: "link-success", ProbeStatus: VideoMetadataStatusSuccess, MetadataVersion: 2, FileSize: 700},
@@ -70,7 +76,7 @@ func TestResourcesFileSizeStatsUsesAllFilteredVideoResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aggregate file size stats: %v", err)
 	}
-	if stats.TotalFiles != 4 || stats.CountedFiles != 2 || stats.UncountedFiles != 2 || stats.TotalSize != 800 {
+	if stats.TotalFiles != 6 || stats.CountedFiles != 4 || stats.UncountedFiles != 2 || stats.TotalSize != 1350 {
 		t.Fatalf("unexpected file size stats: %#v", stats)
 	}
 }

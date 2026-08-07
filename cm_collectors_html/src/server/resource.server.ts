@@ -9,7 +9,7 @@ export const resourceServer = {
       method: 'get',
     })
   },
-  dataList: async (filesBasesId: string, fetchCount: boolean, page: number, limit: number, searchData: I_searchData) => {
+  dataList: async (filesBasesId: string, fetchCount: boolean, page: number, limit: number, searchData: I_searchData, randomSeed = '') => {
     return await request<{ total: number, dataList: I_resource[] }>({
       url: `${routerGroupUri}/resource/dataList`,
       method: 'post',
@@ -18,6 +18,7 @@ export const resourceServer = {
         page,
         limit,
         filesBasesId,
+        randomSeed,
         searchData,
       }
     })

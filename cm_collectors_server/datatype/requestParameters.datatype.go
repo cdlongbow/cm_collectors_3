@@ -16,6 +16,7 @@ type ReqParam_AdminLogin struct {
 type ReqParam_ResourcesList struct {
 	ParPaging
 	FilesBasesId string              `json:"filesBasesId"`
+	RandomSeed   string              `json:"randomSeed"`
 	SearchData   ReqParam_SearchData `json:"searchData"`
 }
 
@@ -41,6 +42,7 @@ type ReqParam_ResourceBase struct {
 	FilesBasesID          string         `json:"filesBases_id" binding:"required"`
 	Mode                  E_resourceMode `json:"mode" binding:"required"`
 	Title                 string         `json:"title" binding:"required"`
+	Subtitle              string         `json:"subtitle"`
 	IssueNumber           string         `json:"issueNumber"`
 	CoverPoster           string         `json:"coverPoster"`
 	CoverPosterMode       int            `json:"coverPosterMode"`

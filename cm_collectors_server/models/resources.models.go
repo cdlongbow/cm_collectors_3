@@ -1,9 +1,12 @@
 package models
 
 import (
+	"bytes"
 	"cm_collectors_server/core"
 	"cm_collectors_server/datatype"
+	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -14,6 +17,7 @@ type Resources struct {
 	ID                    string                  `json:"id" gorm:"primaryKey;type:char(20);"`
 	FilesBasesID          string                  `json:"filesBases_id" gorm:"column:filesBases_id;type:char(20);index:idx_resources_filesBasesID"`
 	Title                 string                  `json:"title" gorm:"type:varchar(200);"`
+	Subtitle              string                  `json:"subtitle" gorm:"type:varchar(300);"`
 	KeyWords              string                  `json:"keyWords" gorm:"column:keyWords;type:varchar(500);"`
 	IssueNumber           string                  `json:"issueNumber" gorm:"column:issueNumber;type:varchar(200);"`
 	Mode                  datatype.E_resourceMode `json:"mode" gorm:"type:varchar(20);"`
@@ -189,7 +193,7 @@ func (t Resources) DataList(db *gorm.DB, par *datatype.ReqParam_ResourcesList) (
 	var dataList []Resources
 	var total int64
 	offset := (par.Page - 1) * par.Limit
-	query := t.Preload(db).Model(Resources{}).Where("filesBases_id = ?", par.FilesBasesId)
+	query := db.Model(Resources{}).Where("filesBases_id = ?", par.FilesBasesId)
 	query = t.setDbSearchData(query, &par.SearchData)
 	if par.FetchCount {
 		err := query.Count(&total).Error
@@ -197,8 +201,33 @@ func (t Resources) DataList(db *gorm.DB, par *datatype.ReqParam_ResourcesList) (
 			return nil, 0, err
 		}
 	}
-	query = t.setDbSearchDataOrder(query, par.SearchData.Sort).Limit(par.Limit).Offset(offset)
-	err := query.Find(&dataList).Error
+
+	var err error
+	if par.SearchData.Sort == datatype.E_searchSort_random && par.RandomSeed != "" {
+		var ids []string
+		idQuery := db.Model(Resources{}).Where("filesBases_id = ?", par.FilesBasesId)
+		idQuery = t.setDbSearchData(idQuery, &par.SearchData)
+		if err = idQuery.Pluck("id", &ids).Error; err != nil {
+			return nil, 0, err
+		}
+		pageIDs := stableRandomResourcePage(ids, par.RandomSeed, offset, par.Limit)
+		if len(pageIDs) > 0 {
+			query = t.Preload(db).Model(Resources{}).Where("id IN ?", pageIDs)
+			err = query.Find(&dataList).Error
+			order := make(map[string]int, len(pageIDs))
+			for index, id := range pageIDs {
+				order[id] = index
+			}
+			sort.Slice(dataList, func(i, j int) bool {
+				return order[dataList[i].ID] < order[dataList[j].ID]
+			})
+		}
+	} else {
+		query = t.Preload(db).Model(Resources{}).Where("filesBases_id = ?", par.FilesBasesId)
+		query = t.setDbSearchData(query, &par.SearchData)
+		query = t.setDbSearchDataOrder(query, par.SearchData.Sort).Limit(par.Limit).Offset(offset)
+		err = query.Find(&dataList).Error
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -222,6 +251,43 @@ func (t Resources) DataList(db *gorm.DB, par *datatype.ReqParam_ResourcesList) (
 	return &dataList, total, err
 }
 
+type stableRandomResource struct {
+	id   string
+	hash [sha256.Size]byte
+}
+
+// stableRandomResourcePage keeps random pagination stable for the lifetime of a seed.
+func stableRandomResourcePage(ids []string, seed string, offset, limit int) []string {
+	if offset < 0 || limit <= 0 || offset >= len(ids) {
+		return []string{}
+	}
+	seedHash := sha256.Sum256([]byte(seed))
+	items := make([]stableRandomResource, len(ids))
+	buffer := make([]byte, sha256.Size, sha256.Size+64)
+	copy(buffer, seedHash[:])
+	for index, id := range ids {
+		items[index] = stableRandomResource{
+			id:   id,
+			hash: sha256.Sum256(append(buffer[:sha256.Size], id...)),
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if comparison := bytes.Compare(items[i].hash[:], items[j].hash[:]); comparison != 0 {
+			return comparison < 0
+		}
+		return items[i].id < items[j].id
+	})
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	result := make([]string, end-offset)
+	for index := offset; index < end; index++ {
+		result[index-offset] = items[index].id
+	}
+	return result
+}
+
 // FileSizeStats 聚合当前筛选结果的全部视频分集，不受分页参数影响。
 // 只统计当前元数据版本且探测成功的文件大小，避免把路径已变化后的旧大小计入总量。
 func (t Resources) FileSizeStats(db *gorm.DB, par *datatype.ReqParam_ResourceFileSizeStats, metadataVersion int) (*datatype.ResourceFileSizeStats, error) {
@@ -235,19 +301,24 @@ func (t Resources) FileSizeStats(db *gorm.DB, par *datatype.ReqParam_ResourceFil
 		Select(`
 			COUNT(ds.id) AS total_files,
 			COALESCE(SUM(CASE
-				WHEN vm.probe_status = ? AND vm.metadata_version >= ? AND vm.file_size > 0
+				WHEN vm.file_size > 0 AND ((vm.probe_status = ? AND vm.metadata_version >= ?)
+					OR vm.probe_status IN (?, ?))
 				THEN 1 ELSE 0 END), 0) AS counted_files,
 			COALESCE(SUM(CASE
-				WHEN vm.probe_status = ? AND vm.metadata_version >= ? AND vm.file_size > 0
+				WHEN vm.file_size > 0 AND ((vm.probe_status = ? AND vm.metadata_version >= ?)
+					OR vm.probe_status IN (?, ?))
 				THEN vm.file_size ELSE 0 END), 0) AS total_size`,
 			VideoMetadataStatusSuccess, metadataVersion,
-			VideoMetadataStatusSuccess, metadataVersion).
+			VideoMetadataStatusFailed, VideoMetadataStatusManual,
+			VideoMetadataStatusSuccess, metadataVersion,
+			VideoMetadataStatusFailed, VideoMetadataStatusManual).
 		Joins("JOIN resources AS r ON r.id = ds.resources_id").
 		Joins("LEFT JOIN resources_video_metadata AS vm ON vm.drama_series_id = ds.id").
 		Where("r.mode IN ?", []datatype.E_resourceMode{
 			datatype.E_resourceMode_Movies,
 			datatype.E_resourceMode_VideoLink,
 		}).
+		Where("COALESCE(ds.video_metadata_excluded, 0) = 0").
 		Where("r.id IN (?)", resourceIDs).
 		Scan(stats).Error
 	if err != nil {

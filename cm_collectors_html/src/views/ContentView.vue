@@ -71,6 +71,7 @@ import type { I_resource, I_resourceFileSizeStats } from '@/dataType/resource.da
 import { ElMessage } from 'element-plus';
 import { resourceServer } from '@/server/resource.server';
 import { debounce } from '@/assets/debounce';
+import { E_searchSort } from '@/dataType/search.dataType';
 const store = {
   appStoreData: appStoreData(),
   searchStoreData: searchStoreData(),
@@ -96,12 +97,14 @@ let fileSizeStatsRequestVersion = 0;
 let fetchCount = true;
 let durationRefreshTimer: number | undefined;
 let dataListRequestVersion = 0;
+let randomSeed = '';
 const currentPage = ref(1);
 const pageSize = ref(store.appStoreData.currentConfigApp.pageLimit);
 
 watch(
   () => store.searchStoreData.searchData,
   () => {
+    randomSeed = store.searchStoreData.searchData.sort === E_searchSort.Random ? createRandomSeed() : '';
     init();
   },
   { deep: true }
@@ -118,6 +121,7 @@ watch(
   () => store.appStoreData.currentFilesBases.id,
   () => {
     dataListRequestVersion++;
+    randomSeed = '';
     window.clearTimeout(durationRefreshTimer);
     dataList.value = [];
     dataCount.value = 0;
@@ -154,12 +158,20 @@ const init_DataList = async (fn: () => void = () => { }, fetch: boolean = false)
   await getDataList(fn);
 }
 
+const createRandomSeed = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+const currentRandomSeed = () => {
+  if (store.searchStoreData.searchData.sort !== E_searchSort.Random) return '';
+  if (!randomSeed) randomSeed = createRandomSeed();
+  return randomSeed;
+}
+
 const executeGetDataList = debounce(async (requestVersion: number, fn: () => void) => {
   const filesBasesId = store.appStoreData.currentFilesBases.id;
   const shouldFetchCount = fetchCount;
   try {
     loading.value = true;
-    const result = await resourceServer.dataList(filesBasesId, shouldFetchCount, currentPage.value, pageSize.value, store.searchStoreData.searchData);
+    const result = await resourceServer.dataList(filesBasesId, shouldFetchCount, currentPage.value, pageSize.value, store.searchStoreData.searchData, currentRandomSeed());
     if (requestVersion !== dataListRequestVersion || filesBasesId !== store.appStoreData.currentFilesBases.id) return;
     if (result && result.status) {
       dataList.value = result.data.dataList;
@@ -196,7 +208,7 @@ const scheduleDurationRefresh = () => {
   const filesBasesId = store.appStoreData.currentFilesBases.id;
   durationRefreshTimer = window.setTimeout(async () => {
     if (requestVersion !== dataListRequestVersion || filesBasesId !== store.appStoreData.currentFilesBases.id) return;
-    const result = await resourceServer.dataList(filesBasesId, false, currentPage.value, pageSize.value, store.searchStoreData.searchData);
+    const result = await resourceServer.dataList(filesBasesId, false, currentPage.value, pageSize.value, store.searchStoreData.searchData, currentRandomSeed());
     if (requestVersion === dataListRequestVersion && filesBasesId === store.appStoreData.currentFilesBases.id && result && result.status) {
       dataList.value = result.data.dataList;
     }

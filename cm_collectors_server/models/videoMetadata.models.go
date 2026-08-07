@@ -12,6 +12,7 @@ const (
 	VideoMetadataStatusSuccess    = "success"
 	VideoMetadataStatusFailed     = "failed"
 	VideoMetadataStatusStale      = "stale"
+	VideoMetadataStatusManual     = "manual"
 
 	VideoMetadataScopeSelected = "selected"
 	VideoMetadataScopeAll      = "all"
@@ -28,6 +29,7 @@ type ResourcesVideoMetadata struct {
 	DramaSeriesID    string               `json:"dramaSeriesId" gorm:"column:drama_series_id;primaryKey;type:char(20);"`
 	MetadataVersion  int                  `json:"metadataVersion" gorm:"column:metadata_version;type:int;default:0;index:idx_video_metadata_version"`
 	ProbeStatus      string               `json:"probeStatus" gorm:"column:probe_status;type:varchar(20);index:idx_video_metadata_status"`
+	MetadataSource   string               `json:"metadataSource" gorm:"column:metadata_source;type:varchar(20);default:probe"`
 	ProbeTime        *datatype.CustomTime `json:"probeTime" gorm:"column:probe_time;type:datetime;"`
 	NextRetryTime    *datatype.CustomTime `json:"nextRetryTime" gorm:"column:next_retry_time;type:datetime;"`
 	RetryCount       int                  `json:"retryCount" gorm:"column:retry_count;type:int;default:0"`

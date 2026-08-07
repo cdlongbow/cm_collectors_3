@@ -77,6 +77,7 @@ import { debounce } from '@/assets/debounce'
 import { ElMessage } from 'element-plus'
 import { playResource } from '@/common/play'
 import { goToMobileOrPC, setMobileShow } from '@/assets/mobile'
+import { E_searchSort } from '@/dataType/search.dataType'
 
 const store = {
   appStoreData: appStoreData(),
@@ -87,6 +88,7 @@ const store = {
 let fetchCount = true
 let durationRefreshTimer: number | undefined
 let dataListRequestVersion = 0
+let randomSeed = ''
 
 const loading = ref(false)
 const dataList = ref<I_resource[]>([])
@@ -131,6 +133,7 @@ watch(
   (id) => {
     selectedDataBaseId.value = id
     dataListRequestVersion++
+    randomSeed = ''
     window.clearTimeout(durationRefreshTimer)
     dataList.value = []
     dataCount.value = 0
@@ -141,12 +144,21 @@ watch(
 watch(
   () => store.searchStoreData.searchData,
   () => {
+    randomSeed = store.searchStoreData.searchData.sort === E_searchSort.Random ? createRandomSeed() : ''
     fetchCount = true
     currentPage.value = 1
     getDataList(scrollContentToTop)
   },
   { deep: true },
 )
+
+const createRandomSeed = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+const currentRandomSeed = () => {
+  if (store.searchStoreData.searchData.sort !== E_searchSort.Random) return ''
+  if (!randomSeed) randomSeed = createRandomSeed()
+  return randomSeed
+}
 
 const executeGetDataList = debounce(async (requestVersion: number, callback: () => void) => {
   const filesBasesId = store.appStoreData.currentFilesBases.id
@@ -159,6 +171,7 @@ const executeGetDataList = debounce(async (requestVersion: number, callback: () 
       currentPage.value,
       pageSize.value,
       store.searchStoreData.searchData,
+      currentRandomSeed(),
     )
     if (requestVersion !== dataListRequestVersion || filesBasesId !== store.appStoreData.currentFilesBases.id) return
     if (result && result.status) {
@@ -198,6 +211,7 @@ const scheduleDurationRefresh = () => {
       currentPage.value,
       pageSize.value,
       store.searchStoreData.searchData,
+      currentRandomSeed(),
     )
     if (requestVersion === dataListRequestVersion
       && filesBasesId === store.appStoreData.currentFilesBases.id
