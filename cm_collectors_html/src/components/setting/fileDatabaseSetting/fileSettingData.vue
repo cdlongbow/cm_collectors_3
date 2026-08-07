@@ -107,6 +107,18 @@
       <el-form-item label="详情显示模式">
         <selectResourceDetailsShowMode v-model="filesConfig.resourceDetailsShowMode" />
       </el-form-item>
+      <el-form-item label="详情信息显示项">
+        <el-checkbox-group v-model="filesConfig.detailsVisibleFields">
+          <el-checkbox label="副标题" value="subtitle" />
+          <el-checkbox label="版号" value="issueNumber" />
+          <el-checkbox label="国家" value="country" />
+          <el-checkbox label="年份" value="issuingDate" />
+          <el-checkbox label="收录时间" value="addTime" />
+          <el-checkbox label="清晰度" value="definition" />
+          <el-checkbox label="评分" value="score" />
+          <el-checkbox label="评星" value="stars" />
+        </el-checkbox-group>
+      </el-form-item>
       <!--
       <el-form-item label="预览图">
         <el-checkbox v-model="filesConfig.showPreviewImage" label="显示预览图" border />

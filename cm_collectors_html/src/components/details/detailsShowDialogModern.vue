@@ -16,6 +16,9 @@
 
         <div class="modern-details-summary">
           <h2>{{ props.resource.title }}</h2>
+          <p v-if="showField('subtitle') && props.resource.subtitle" class="modern-details-subtitle">
+            {{ props.resource.subtitle }}
+          </p>
 
           <detailsBtn class="modern-details-actions" :resource="props.resource" show-labels
             @paly="close" @update-resouce-success="updateResourceSuccessHandle"
@@ -23,31 +26,31 @@
           </detailsBtn>
 
           <dl class="modern-details-meta">
-            <div v-if="props.resource.issueNumber">
+            <div v-if="showField('issueNumber') && props.resource.issueNumber" class="modern-details-meta--wide">
               <dt>版号</dt>
               <dd>{{ props.resource.issueNumber }}</dd>
             </div>
-            <div v-if="props.resource.issuingDate">
-              <dt>年份</dt>
-              <dd>{{ props.resource.issuingDate }}</dd>
-            </div>
-            <div v-if="props.resource.country">
+            <div v-if="showField('country') && props.resource.country">
               <dt>国家</dt>
               <dd>{{ appLang.country(props.resource.country) }}</dd>
             </div>
-            <div v-if="props.resource.definition">
-              <dt>清晰度</dt>
-              <dd>{{ appLang.definition(props.resource.definition) }}</dd>
+            <div v-if="showField('issuingDate') && props.resource.issuingDate">
+              <dt>年份</dt>
+              <dd>{{ props.resource.issuingDate }}</dd>
             </div>
-            <div>
+            <div v-if="showField('addTime')">
               <dt>收录时间</dt>
               <dd>{{ props.resource.addTime }}</dd>
             </div>
-            <div>
+            <div v-if="showField('definition') && props.resource.definition">
+              <dt>清晰度</dt>
+              <dd>{{ appLang.definition(props.resource.definition) }}</dd>
+            </div>
+            <div v-if="showField('score')">
               <dt>评分</dt>
               <dd>{{ props.resource.score }}</dd>
             </div>
-            <div>
+            <div v-if="showField('stars')">
               <dt>评星</dt>
               <dd class="modern-details-rating">
                 <el-rate :model-value="props.resource.stars || 0" disabled />
@@ -71,8 +74,14 @@ import { getResourceCoverPoster } from '@/common/photo'
 import { AppLang } from '@/language/app.lang'
 import detailsBtn from './detailsBtn.vue'
 import detailsInfo from './detailsInfo.vue'
+import { appStoreData } from '@/storeData/app.storeData'
+import type { T_detailsVisibleField } from '@/dataType/config.dataType'
+import { isDetailsFieldVisible } from './detailsVisibility'
 
 const appLang = AppLang()
+const store = appStoreData()
+const showField = (field: T_detailsVisibleField) =>
+  isDetailsFieldVisible(store.currentConfigApp, field)
 const dialogVisible = ref(false)
 const props = defineProps({
   resource: {
@@ -251,6 +260,14 @@ defineExpose({ open, close })
   }
 }
 
+.modern-details-subtitle {
+  margin: -8px 0 16px;
+  color: var(--modern-details-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .modern-details-actions {
   margin-bottom: 16px;
 
@@ -280,6 +297,7 @@ defineExpose({ open, close })
 .modern-details-meta {
   margin: 0;
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   color: var(--modern-details-text-muted);
   font-size: 13px;
@@ -301,6 +319,10 @@ defineExpose({ open, close })
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .modern-details-meta--wide {
+    grid-column: 1 / -1;
   }
 }
 

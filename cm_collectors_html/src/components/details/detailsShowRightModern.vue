@@ -18,35 +18,39 @@
           </detailsBtn>
 
           <h2>{{ props.resource.title }}</h2>
+          <p v-if="showField('subtitle') && props.resource.subtitle" class="modern-right-details-subtitle">
+            {{ props.resource.subtitle }}
+          </p>
 
           <dl class="modern-right-details-meta">
-            <div v-if="props.resource.issueNumber">
+            <div v-if="showField('issueNumber') && props.resource.issueNumber"
+              class="modern-right-details-meta--wide">
               <dt>版号</dt>
               <dd>{{ props.resource.issueNumber }}</dd>
             </div>
-            <div v-if="props.resource.issuingDate">
-              <dt>年份</dt>
-              <dd>{{ props.resource.issuingDate }}</dd>
-            </div>
-            <div v-if="props.resource.country">
+            <div v-if="showField('country') && props.resource.country">
               <dt>国家</dt>
               <dd>{{ appLang.country(props.resource.country) }}</dd>
             </div>
-            <div v-if="props.resource.definition">
-              <dt>清晰度</dt>
-              <dd>{{ appLang.definition(props.resource.definition) }}</dd>
+            <div v-if="showField('issuingDate') && props.resource.issuingDate">
+              <dt>年份</dt>
+              <dd>{{ props.resource.issuingDate }}</dd>
             </div>
-            <div class="modern-right-details-meta--wide">
+            <div v-if="showField('addTime')">
               <dt>收录时间</dt>
               <dd>{{ props.resource.addTime }}</dd>
             </div>
-            <div>
+            <div v-if="showField('definition') && props.resource.definition">
+              <dt>清晰度</dt>
+              <dd>{{ appLang.definition(props.resource.definition) }}</dd>
+            </div>
+            <div v-if="showField('score')">
               <dt>评分</dt>
               <dd>{{ props.resource.score }}</dd>
             </div>
           </dl>
 
-          <div class="modern-right-details-stars">
+          <div v-if="showField('stars')" class="modern-right-details-stars">
             <span>评星</span>
             <el-rate :model-value="props.resource.stars || 0" disabled />
           </div>
@@ -68,6 +72,8 @@ import { AppLang } from '@/language/app.lang'
 import { appStoreData } from '@/storeData/app.storeData'
 import detailsBtn from './detailsBtn.vue'
 import detailsInfo from './detailsInfo.vue'
+import type { T_detailsVisibleField } from '@/dataType/config.dataType'
+import { isDetailsFieldVisible } from './detailsVisibility'
 
 const appLang = AppLang()
 const store = appStoreData()
@@ -83,6 +89,8 @@ const emits = defineEmits<{
 }>()
 
 const isBrightTheme = computed(() => store.appConfig.theme === 'bright')
+const showField = (field: T_detailsVisibleField) =>
+  isDetailsFieldVisible(store.currentConfigApp, field)
 const updateResourceSuccessHandle = (resource: I_resource) => emits('updateResouceSuccess', resource)
 const deleteResourceSuccessHandle = () => emits('deleteResourceSuccess')
 </script>
@@ -154,6 +162,14 @@ const deleteResourceSuccessHandle = () => emits('deleteResourceSuccess')
     line-height: 1.35;
     overflow-wrap: anywhere;
   }
+}
+
+.modern-right-details-subtitle {
+  margin: -4px 2px 9px;
+  color: var(--modern-details-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .modern-right-details-cover {

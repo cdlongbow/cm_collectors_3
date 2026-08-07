@@ -183,6 +183,11 @@ func (t ImportData) ScanDiskImportData(filesBasesId, filePath string, config dat
 		//如果已经存在，则更新
 		resourceID := (*resourcesDramaSeriesScl)[0].ResourcesID
 		resourceDataParam.Resource.ID = resourceID
+		var existingResource models.Resources
+		if err := core.DBS().Select("subtitle").Where("id = ?", resourceID).First(&existingResource).Error; err == nil {
+			// 扫盘/NFO 当前没有副标题映射，避免重新扫描时清空用户手工录入的副标题。
+			resourceDataParam.Resource.Subtitle = existingResource.Subtitle
+		}
 		_, err := Resources{}.UpdateResource(&resourceDataParam, false)
 		return err
 	} else {

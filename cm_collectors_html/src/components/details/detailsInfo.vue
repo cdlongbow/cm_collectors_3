@@ -5,28 +5,33 @@
         <div class="title">
           {{ props.resource.title }}
         </div>
-        <div class="info-base">
-          <div class="info-base-item" v-if="props.resource.issueNumber != ''">
+        <div v-if="showField('subtitle') && props.resource.subtitle" class="subtitle">
+          {{ props.resource.subtitle }}
+        </div>
+        <div v-if="hasVisibleOverviewInfo" class="info-base">
+          <div class="info-base-item" v-if="showField('issueNumber') && props.resource.issueNumber != ''">
             版号、番号、刊号: {{ props.resource.issueNumber }}
           </div>
-          <div class="info-base-item">
+          <div v-if="(showField('issuingDate') && props.resource.issuingDate)
+            || (showField('country') && props.resource.country)
+            || (showField('definition') && props.resource.definition)" class="info-base-item">
             <el-breadcrumb separator="|">
-              <el-breadcrumb-item v-if="props.resource.issuingDate && props.resource.issuingDate != ''">
+              <el-breadcrumb-item v-if="showField('issuingDate') && props.resource.issuingDate">
                 年份: {{ props.resource.issuingDate }}
               </el-breadcrumb-item>
-              <el-breadcrumb-item v-if="props.resource.country != ''">
+              <el-breadcrumb-item v-if="showField('country') && props.resource.country != ''">
                 国家: {{ appLang.country(props.resource.country) }}
               </el-breadcrumb-item>
-              <el-breadcrumb-item v-if="props.resource.definition != ''">
+              <el-breadcrumb-item v-if="showField('definition') && props.resource.definition != ''">
                 清晰度: {{ appLang.definition(props.resource.definition) }}
               </el-breadcrumb-item>
             </el-breadcrumb>
           </div>
-          <div class="info-base-item-flex">
-            <div>收录时间: {{ props.resource.addTime }}</div>
-            <div>评分: {{ props.resource.score }}</div>
+          <div v-if="showField('addTime') || showField('score')" class="info-base-item-flex">
+            <div v-if="showField('addTime')">收录时间: {{ props.resource.addTime }}</div>
+            <div v-if="showField('score')">评分: {{ props.resource.score }}</div>
           </div>
-          <div class="info-base-rate">
+          <div v-if="showField('stars')" class="info-base-rate">
             <el-rate v-model="localStars" disabled />
           </div>
         </div>
@@ -104,11 +109,15 @@ import performerPopoverBlock from '@/components/performer/performerPopoverBlock.
 import detailsSampleImages from './detailsSampleImages.vue';
 import detailsTags from './detailsTags.vue';
 import { AppLang } from '@/language/app.lang'
+import type { T_detailsVisibleField } from '@/dataType/config.dataType'
+import { isDetailsFieldVisible } from './detailsVisibility'
 const appLang = AppLang()
 
 const store = {
   appStoreData: appStoreData(),
 }
+const showField = (field: T_detailsVisibleField) =>
+  isDetailsFieldVisible(store.appStoreData.currentConfigApp, field)
 const props = defineProps({
   resource: {
     type: Object as PropType<I_resource> | undefined,
@@ -151,6 +160,18 @@ const abstract_C = computed(() => {
   return props.resource.abstract.replace(/\n/g, '<br>')
 })
 
+const hasVisibleOverviewInfo = computed(() => {
+  const resource = props.resource
+  if (!resource) return false
+  return (showField('issueNumber') && !!resource.issueNumber)
+    || (showField('issuingDate') && !!resource.issuingDate)
+    || (showField('country') && !!resource.country)
+    || (showField('definition') && !!resource.definition)
+    || showField('addTime')
+    || showField('score')
+    || showField('stars')
+})
+
 const playResourceDramaSeriesHandle = (ds: I_resourceDramaSeries) => {
   if (!props.resource) return
   playResource(props.resource, ds.id)
@@ -174,6 +195,14 @@ const playResourceDramaSeriesHandle = (ds: I_resourceDramaSeries) => {
   font-weight: 500;
   line-height: 1.2em;
   color: #ffffff;
+}
+
+.subtitle {
+  margin-top: 3px;
+  color: #a8abb2;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .info-base {

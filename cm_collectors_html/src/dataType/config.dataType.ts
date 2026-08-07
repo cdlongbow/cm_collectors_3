@@ -3,6 +3,13 @@ import { E_detailsDramaSeriesMode, E_resourceOpenMode, E_resourceOpenMode_SoftTy
 import dataset from "@/assets/dataset";
 import type { E_searchSort } from "./search.dataType";
 
+export type T_detailsVisibleField = 'subtitle' | 'issueNumber' | 'country' | 'issuingDate' |
+  'addTime' | 'definition' | 'score' | 'stars';
+
+export const defaultDetailsVisibleFields: T_detailsVisibleField[] = [
+  'subtitle', 'issueNumber', 'country', 'issuingDate', 'addTime', 'definition', 'score', 'stars',
+];
+
 export enum E_config_type {
   app = 'app',
   importScanDisk = 'importScanDisk',
@@ -35,6 +42,7 @@ export interface I_config_app {
   definitionFontColor: string; // 清晰度颜色
   definitionRgba: string; // 清晰度颜色
   detailsDramaSeriesMode: E_detailsDramaSeriesMode; // 剧集显示模式
+  detailsVisibleFields: T_detailsVisibleField[]; // 详情信息显示项
   director_Text: string; // 导演显示文字
   casualViewModule: boolean; //随便看看模块
   casualViewNumber: number; // 随便看看数量
@@ -123,6 +131,7 @@ export const defualtConfigApp: I_config_app = {
   coverTitleAlign: 'left',
   resourceJustifyContent: 'flex-start',
   detailsDramaSeriesMode: E_detailsDramaSeriesMode.fileName,
+  detailsVisibleFields: [...defaultDetailsVisibleFields],
   casualViewModule: false,
   casualViewNumber: 10,
   historyModule: false,

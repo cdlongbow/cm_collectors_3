@@ -103,6 +103,7 @@ type Config_FilesBases struct {
 	DefinitionFontColor          string                    `json:"definitionFontColor"`          // 清晰度颜色
 	DefinitionRgba               string                    `json:"definitionRgba"`               // 清晰度颜色
 	DetailsDramaSeriesMode       EDetailsDramaSeriesMode   `json:"detailsDramaSeriesMode"`       // 剧集显示模式
+	DetailsVisibleFields         []string                  `json:"detailsVisibleFields"`         // 详情信息显示项
 	DirectorText                 string                    `json:"director_Text"`                // 导演显示文字
 	HistoryModule                bool                      `json:"historyModule"`                // 历史记录是否开启
 	HistoryNumber                int                       `json:"historyNumber"`                // 历史记录数量

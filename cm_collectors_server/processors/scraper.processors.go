@@ -550,11 +550,12 @@ func (t Scraper) ScraperOneResourceDataProcess(par *datatype.ReqParam_ScraperOne
 		//添加新资源
 		return Resources{}.CreateResource(&resourceDataParam)
 	} else {
-		//如果是更新操作
-		if par.Operate == datatype.E_PerformerUpdateOperate_Update {
-			// 读取原始资源信息
-			resourceInfo, err := Resources{}.Info(par.ResourdId)
-			if err == nil {
+		// 副标题没有刮削来源，覆盖或增量更新都应保留用户手工录入值。
+		resourceInfo, resourceInfoErr := (Resources{}).Info(par.ResourdId)
+		if resourceInfoErr == nil {
+			resourceDataParam.Resource.Subtitle = resourceInfo.Subtitle
+			// 增量更新继续保留已有的非空业务信息。
+			if par.Operate == datatype.E_PerformerUpdateOperate_Update {
 				//覆盖信息
 				if resourceInfo.Title != "" {
 					resourceDataParam.Resource.Title = resourceInfo.Title

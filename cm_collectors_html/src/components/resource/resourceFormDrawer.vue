@@ -68,6 +68,9 @@
           <el-form-item label="资源标题" prop="title">
             <el-input v-model="formData.title" />
           </el-form-item>
+          <el-form-item label="副标题">
+            <el-input v-model="formData.subtitle" />
+          </el-form-item>
           <el-form-item label="版号 / 番号">
             <el-input v-model="formData.issueNumber" />
           </el-form-item>
@@ -180,6 +183,7 @@ const defaultFormData: I_resource_base = {
   filesBases_id: '',
   mode: E_resourceDramaSeriesType.Movies,
   title: '',
+  subtitle: '',
   issueNumber: '',
   coverPoster: '',
   coverPosterMode: 0,
