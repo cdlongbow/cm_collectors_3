@@ -124,6 +124,42 @@ func TestSetResourcesDramaSeriesPathChangeMarksStale(t *testing.T) {
 	}
 }
 
+func TestSetResourcesDramaSeriesRescanCorrectsExistingImageMetadata(t *testing.T) {
+	db := newDramaSeriesSyncTestDB(t)
+	if err := db.Create(&models.ResourcesDramaSeries{
+		ID: "ds-image", ResourcesID: "resource-1", Src: "cover.JPG", DurationSeconds: 10,
+	}).Error; err != nil {
+		t.Fatalf("create drama series: %v", err)
+	}
+	if err := db.Create(&models.ResourcesVideoMetadata{
+		DramaSeriesID: "ds-image", ProbeStatus: models.VideoMetadataStatusSuccess,
+		MetadataVersion: CurrentVideoMetadataVersion, FileSize: 900,
+	}).Error; err != nil {
+		t.Fatalf("create metadata: %v", err)
+	}
+
+	err := (ResourcesDramaSeries{}).SetResourcesDramaSeries(db, "resource-1",
+		[]datatype.ReqParam_resourceDramaSeries_Base{{ID: "ds-image", Src: "cover.JPG"}})
+	if err != nil {
+		t.Fatalf("rescan image: %v", err)
+	}
+
+	ds, err := (models.ResourcesDramaSeries{}).Info(db, "ds-image")
+	if err != nil {
+		t.Fatalf("image series should remain: %v", err)
+	}
+	if ds.Src != "cover.JPG" || !ds.VideoMetadataExcluded || ds.DurationSeconds != 0 || ds.DurationProbeStatus != "" {
+		t.Fatalf("image series classification is wrong: %#v", ds)
+	}
+	var metadataCount int64
+	if err := db.Model(&models.ResourcesVideoMetadata{}).Where("drama_series_id = ?", ds.ID).Count(&metadataCount).Error; err != nil {
+		t.Fatalf("count metadata: %v", err)
+	}
+	if metadataCount != 0 {
+		t.Fatalf("image metadata should be removed, count=%d", metadataCount)
+	}
+}
+
 func TestSetResourcesDramaSeriesSyncsFingerprintForModeAndLibraryChanges(t *testing.T) {
 	db := newDramaSeriesSyncTestDB(t)
 	if err := db.Create(&models.ResourcesDramaSeries{

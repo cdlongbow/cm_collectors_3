@@ -45,6 +45,48 @@ func (VideoMetadata) Info(c *gin.Context) {
 	response.OkWithData(data, c)
 }
 
+func (VideoMetadata) Failures(c *gin.Context) {
+	var request processors.VideoMetadataFailureQuery
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	data, err := (processors.VideoMetadata{}).Failures(request)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(data, c)
+}
+
+func (VideoMetadata) RetryFailure(c *gin.Context) {
+	if err := (processors.VideoMetadata{}).RetryFailure(c.Param("dramaSeriesId")); ResError(c, err) != nil {
+		return
+	}
+	response.OkWithData(true, c)
+}
+
+func (VideoMetadata) SetClassification(c *gin.Context) {
+	var request processors.VideoMetadataClassificationRequest
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	if err := (processors.VideoMetadata{}).SetClassification(request); ResError(c, err) != nil {
+		return
+	}
+	response.OkWithData(true, c)
+}
+
+func (VideoMetadata) SaveManual(c *gin.Context) {
+	var request processors.VideoMetadataManualRequest
+	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {
+		return
+	}
+	data, err := (processors.VideoMetadata{}).SaveManual(request)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(data, c)
+}
+
 func (VideoMetadata) Run(c *gin.Context) {
 	var request processors.VideoMetadataRunRequest
 	if err := ParameterHandleShouldBindJSON(c, &request); err != nil {

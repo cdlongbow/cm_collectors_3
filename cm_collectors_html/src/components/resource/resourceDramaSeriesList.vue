@@ -45,10 +45,10 @@
                 </div>
               </el-popover>
               <span class="metadata">
-                {{ metadataText(item) || (props.showVideoInfo ? '视频信息尚未采集' : '') }}
+                {{ metadataText(item) || (props.showVideoInfo && !item.videoMetadataExcluded ? '视频信息尚未采集' : '') }}
               </span>
               <span v-if="metadataStatusText(item)" class="metadata metadata-status"
-                :class="`metadata-status--${item.videoMetadata?.probeStatus}`">
+                :class="`metadata-status--${item.videoMetadataExcluded ? 'excluded' : item.videoMetadata?.probeStatus}`">
                 {{ metadataStatusText(item) }}
               </span>
               <el-tooltip v-else-if="item.videoMetadata?.probeStatus === 'failed'"
@@ -138,10 +138,12 @@ const metadataText = (item: I_resourceDramaSeries) => {
 };
 
 const metadataStatusText = (item: I_resourceDramaSeries) => {
+  if (item.videoMetadataExcluded) return '非视频';
   const status = item.videoMetadata?.probeStatus;
   if (status === 'stale') return '待更新';
   if (status === 'processing') return '采集中';
   if (status === 'failed' && metadataText(item)) return '采集失败';
+  if (status === 'manual') return '人工信息';
   return '';
 };
 
@@ -441,6 +443,11 @@ const formatBitRate = (bitRate: number) => {
 
       .metadata-status--failed {
         color: var(--el-color-danger);
+      }
+
+      .metadata-status--manual,
+      .metadata-status--excluded {
+        color: var(--el-text-color-secondary);
       }
     }
   }

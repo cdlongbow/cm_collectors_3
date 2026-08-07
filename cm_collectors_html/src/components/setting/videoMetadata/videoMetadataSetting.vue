@@ -102,18 +102,70 @@
       </el-alert>
     </el-card>
 
-    <el-card shadow="never">
-      <template #header>文件库采集概况</template>
-      <el-table :data="stats" stripe>
-        <el-table-column prop="name" label="文件库" min-width="160" />
-        <el-table-column prop="total" label="视频分集" width="100" align="center" />
-        <el-table-column prop="completed" label="已完成" width="100" align="center" />
-        <el-table-column prop="pending" label="待补齐" width="100" align="center" />
-        <el-table-column prop="stale" label="需更新" width="100" align="center" />
-        <el-table-column prop="failed" label="失败" width="90" align="center" />
-        <el-table-column prop="processing" label="处理中" width="90" align="center" />
-      </el-table>
+    <el-card class="collection-result-card" shadow="never">
+      <el-tabs v-model="collectionResultTab">
+        <el-tab-pane label="文件库采集概况" name="stats">
+          <el-table :data="stats" stripe>
+            <el-table-column prop="name" label="文件库" min-width="160" />
+            <el-table-column prop="total" label="视频分集" width="100" align="center" />
+            <el-table-column prop="completed" label="已完成" width="100" align="center" />
+            <el-table-column prop="pending" label="待补齐" width="100" align="center" />
+            <el-table-column prop="stale" label="需更新" width="100" align="center" />
+            <el-table-column prop="failed" label="失败" width="90" align="center" />
+            <el-table-column prop="processing" label="处理中" width="90" align="center" />
+            <el-table-column prop="manual" label="人工" width="90" align="center" />
+            <el-table-column prop="excluded" label="已排除" width="90" align="center" />
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="采集失败文件" name="failures">
+          <div class="failure-tools">
+            <el-input v-model="failureQuery.keyword" clearable placeholder="搜索资源、路径或错误"
+              @keyup.enter="searchFailures" @clear="searchFailures" />
+            <el-button type="primary" plain @click="searchFailures">查询</el-button>
+          </div>
+          <el-table v-if="failures.length" :data="failures" stripe max-height="430">
+            <el-table-column prop="filesBasesName" label="文件库" width="120" />
+            <el-table-column prop="resourceTitle" label="资源" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="src" label="文件路径" min-width="260" show-overflow-tooltip />
+            <el-table-column label="文件大小" width="110" align="right">
+              <template #default="scope">{{ formatFileSize(scope.row.fileSize) }}</template>
+            </el-table-column>
+            <el-table-column prop="errorMessage" label="失败原因" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="retryCount" label="重试" width="70" align="center" />
+            <el-table-column label="操作" width="250" fixed="right">
+              <template #default="scope">
+                <el-button link type="primary" @click="retryFailure(scope.row)">重试</el-button>
+                <el-button link type="success" @click="openManualDialog(scope.row)">手工补录</el-button>
+                <el-button link type="warning" @click="markNonVideo(scope.row)">标记非视频</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination v-if="failureTotal > 0" class="failure-pagination" background
+            layout="total, sizes, prev, pager, next" v-model:current-page="failureQuery.page"
+            v-model:page-size="failureQuery.limit" :page-sizes="[10, 20, 50, 100]" :total="failureTotal"
+            @current-change="loadFailures" @size-change="changeFailurePageSize" />
+          <el-empty v-if="!failures.length" description="当前没有采集失败的视频" />
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
+
+    <el-dialog v-model="manualDialogVisible" title="手工补录视频信息" width="520px" append-to-body>
+      <div class="manual-path" :title="manualItem?.src">{{ manualItem?.src }}</div>
+      <el-form label-width="110px">
+        <el-form-item label="时长（秒）"><el-input-number v-model="manualForm.durationSeconds" :min="0" /></el-form-item>
+        <el-form-item label="宽度"><el-input-number v-model="manualForm.width" :min="0" /></el-form-item>
+        <el-form-item label="高度"><el-input-number v-model="manualForm.height" :min="0" /></el-form-item>
+        <el-form-item label="视频编码"><el-input v-model="manualForm.videoCodec" placeholder="例如 h264" /></el-form-item>
+        <el-form-item label="音频编码"><el-input v-model="manualForm.audioCodec" placeholder="例如 aac" /></el-form-item>
+      </el-form>
+      <el-alert title="可以只填写已知项目；文件大小会自动读取。人工数据不会被普通自动补齐覆盖。"
+        type="info" :closable="false" />
+      <template #footer>
+        <el-button @click="manualDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualSaving" @click="saveManualMetadata">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -124,6 +176,9 @@ import selectFilesBases from '@/components/com/form/selectFilesBases.vue';
 import { videoMetadataServer } from '@/server/videoMetadata.server';
 import type {
   I_videoMetadataBatchTask,
+  I_videoMetadataFailureItem,
+  I_videoMetadataFailureQuery,
+  I_videoMetadataManualRequest,
   I_videoMetadataRunRequest,
   I_videoMetadataSettingData,
   I_videoMetadataStats,
@@ -166,6 +221,20 @@ const saving = ref(false);
 const taskPanelVisible = ref(false);
 const settingData = reactive<I_videoMetadataSettingData>(defaultSettingData());
 const stats = ref<I_videoMetadataStats[]>([]);
+const collectionResultTab = ref<'stats' | 'failures'>('stats');
+const failures = ref<I_videoMetadataFailureItem[]>([]);
+const failureTotal = ref(0);
+const failureQuery = reactive<I_videoMetadataFailureQuery>({ page: 1, limit: 20, keyword: '' });
+const manualDialogVisible = ref(false);
+const manualSaving = ref(false);
+const manualItem = ref<I_videoMetadataFailureItem>();
+const manualForm = reactive<{
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  videoCodec: string;
+  audioCodec: string;
+}>({ durationSeconds: undefined, width: undefined, height: undefined, videoCodec: '', audioCodec: '' });
 const task = reactive<I_videoMetadataBatchTask>(emptyTask());
 const manual = reactive<I_videoMetadataRunRequest>({
   scopeMode: 'selected',
@@ -199,18 +268,118 @@ const assignTask = (data?: I_videoMetadataBatchTask) => {
   Object.assign(task, data || emptyTask());
 };
 
+const loadFailures = async () => {
+  const result = await videoMetadataServer.failures({ ...failureQuery });
+  if (result.status) {
+    failures.value = result.data?.dataList || [];
+    failureTotal.value = result.data?.total || 0;
+  }
+};
+
 const refreshAll = async () => {
-  const [statsResult, taskResult] = await Promise.all([
+  const [statsResult, taskResult, failureResult] = await Promise.all([
     videoMetadataServer.stats(),
     videoMetadataServer.taskStatus(),
+    videoMetadataServer.failures({ ...failureQuery }),
   ]);
   if (statsResult.status) stats.value = statsResult.data || [];
+  if (failureResult.status) {
+    failures.value = failureResult.data?.dataList || [];
+    failureTotal.value = failureResult.data?.total || 0;
+  }
   if (taskResult.status) {
     if (taskResult.data && ['running', 'paused'].includes(taskResult.data.status)) {
       taskPanelVisible.value = true;
     }
     assignTask(taskResult.data);
   }
+};
+
+const searchFailures = () => {
+  failureQuery.page = 1;
+  loadFailures();
+};
+
+const changeFailurePageSize = () => {
+  failureQuery.page = 1;
+  loadFailures();
+};
+
+const retryFailure = async (item: I_videoMetadataFailureItem) => {
+  const result = await videoMetadataServer.retryFailure(item.dramaSeriesId);
+  if (result.status) {
+    ElMessage.success('已加入重新采集队列');
+    window.setTimeout(() => refreshAll(), 1200);
+  } else {
+    ElMessage.error(result.msg);
+  }
+};
+
+const markNonVideo = async (item: I_videoMetadataFailureItem) => {
+  await ElMessageBox.confirm('标记后将清除该文件的错误视频元数据，但不会删除文件或资源，是否继续？', '标记为非视频', {
+    type: 'warning',
+  });
+  const result = await videoMetadataServer.setClassification(item.dramaSeriesId, false);
+  if (result.status) {
+    ElMessage.success('已标记为非视频');
+    await refreshAll();
+  } else {
+    ElMessage.error(result.msg);
+  }
+};
+
+const openManualDialog = (item: I_videoMetadataFailureItem) => {
+  manualItem.value = item;
+  Object.assign(manualForm, {
+    durationSeconds: undefined,
+    width: undefined,
+    height: undefined,
+    videoCodec: '',
+    audioCodec: '',
+  });
+  manualDialogVisible.value = true;
+};
+
+const saveManualMetadata = async () => {
+  if (!manualItem.value) return;
+  if ((manualForm.durationSeconds ?? 0) <= 0 && (manualForm.width ?? 0) <= 0 && (manualForm.height ?? 0) <= 0 &&
+    !manualForm.videoCodec.trim() && !manualForm.audioCodec.trim()) {
+    ElMessage.warning('请至少填写一项视频信息');
+    return;
+  }
+  manualSaving.value = true;
+  try {
+    const request: I_videoMetadataManualRequest = {
+      dramaSeriesId: manualItem.value.dramaSeriesId,
+    };
+    if ((manualForm.durationSeconds ?? 0) > 0) request.durationSeconds = manualForm.durationSeconds;
+    if ((manualForm.width ?? 0) > 0) request.width = manualForm.width;
+    if ((manualForm.height ?? 0) > 0) request.height = manualForm.height;
+    if (manualForm.videoCodec.trim()) request.videoCodec = manualForm.videoCodec.trim();
+    if (manualForm.audioCodec.trim()) request.audioCodec = manualForm.audioCodec.trim();
+    const result = await videoMetadataServer.saveManual(request);
+    if (result.status) {
+      manualDialogVisible.value = false;
+      ElMessage.success('人工视频信息已保存');
+      await refreshAll();
+    } else {
+      ElMessage.error(result.msg);
+    }
+  } finally {
+    manualSaving.value = false;
+  }
+};
+
+const formatFileSize = (size: number) => {
+  if (!size || size < 0) return '-';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = size;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index++;
+  }
+  return `${value.toFixed(index >= 3 ? 2 : 1)} ${units[index]}`;
 };
 
 const load = async () => {
@@ -382,6 +551,29 @@ onUnmounted(() => {
   .task-error {
     margin-top: 8px;
     color: var(--el-color-danger);
+  }
+
+  .failure-tools {
+    width: min(100%, 430px);
+    margin: 0 0 12px auto;
+    display: flex;
+    gap: 8px;
+  }
+
+  .failure-pagination {
+    margin-top: 14px;
+    justify-content: flex-end;
+  }
+
+  .manual-path {
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    overflow: hidden;
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-light);
+    border-radius: 4px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 </style>

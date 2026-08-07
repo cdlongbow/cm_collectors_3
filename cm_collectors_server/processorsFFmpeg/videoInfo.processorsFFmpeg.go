@@ -198,11 +198,18 @@ func (v VideoInfo) GetVideoFormatInfo(src string) (VideoFormatInfo, error) {
 	// 使用ffprobe获取视频信息
 	ctx, cancel := context.WithTimeout(context.Background(), videoInfoProbeTimeout)
 	defer cancel()
-	cmd := createCommandContext(ctx, ffprobePath, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", src)
-	output, err := cmd.Output()
+	cmd := createCommandContext(ctx, ffprobePath, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", src)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return formatInfo, fmt.Errorf("ffprobe timeout after %s: %w", videoInfoProbeTimeout, ctx.Err())
+		}
+		detail := strings.TrimSpace(string(output))
+		if len(detail) > 2000 {
+			detail = detail[:2000]
+		}
+		if detail != "" {
+			return formatInfo, fmt.Errorf("无法获取视频信息: %v: %s", err, detail)
 		}
 		return formatInfo, fmt.Errorf("无法获取视频信息: %v", err)
 	}

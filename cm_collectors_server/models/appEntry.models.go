@@ -500,10 +500,32 @@ func AutoDatabase(db *gorm.DB) error {
 				return tx.AutoMigrate(&VideoTranscodeTask{})
 			},
 		},
+		{
+			ID: "video_metadata_failure_management_schema_v1",
+			Migrate: func(tx *gorm.DB) error {
+				return migrateVideoMetadataFailureManagementSchema(tx)
+			},
+		},
+		{
+			ID: "resource_subtitle_schema_v1",
+			Migrate: func(tx *gorm.DB) error {
+				return migrateResourceSubtitleSchema(tx)
+			},
+		},
 	})
 	errMigrate := m.Migrate()
 	if errMigrate != nil {
 		core.LogErr(errMigrate)
 	}
 	return errMigrate
+}
+
+// migrateVideoMetadataFailureManagementSchema 只补齐表结构，不扫描或修改历史资源数据。
+func migrateVideoMetadataFailureManagementSchema(tx *gorm.DB) error {
+	return tx.AutoMigrate(&ResourcesDramaSeries{}, &ResourcesVideoMetadata{})
+}
+
+// migrateResourceSubtitleSchema 只增加资源副标题字段，不改写历史资源内容。
+func migrateResourceSubtitleSchema(tx *gorm.DB) error {
+	return tx.AutoMigrate(&Resources{})
 }

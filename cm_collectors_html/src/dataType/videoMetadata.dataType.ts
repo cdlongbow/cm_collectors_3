@@ -4,7 +4,8 @@ export type VideoMetadataRunMode = 'missing' | 'missing_stale' | 'failed' | 'fai
 export interface I_videoMetadata {
   dramaSeriesId: string;
   metadataVersion: number;
-  probeStatus: 'processing' | 'success' | 'failed' | 'stale';
+  probeStatus: 'processing' | 'success' | 'failed' | 'stale' | 'manual';
+  metadataSource: 'probe' | 'manual' | '';
   probeTime: string;
   nextRetryTime: string;
   retryCount: number;
@@ -54,6 +55,44 @@ export interface I_videoMetadataStats {
   failed: number;
   processing: number;
   stale: number;
+  manual: number;
+  excluded: number;
+}
+
+export interface I_videoMetadataFailureQuery {
+  page: number;
+  limit: number;
+  filesBasesId?: string;
+  keyword?: string;
+}
+
+export interface I_videoMetadataFailureItem {
+  dramaSeriesId: string;
+  resourceId: string;
+  resourceTitle: string;
+  filesBasesId: string;
+  filesBasesName: string;
+  src: string;
+  errorCode: string;
+  errorMessage: string;
+  retryCount: number;
+  probeTime: string;
+  nextRetryTime: string;
+  fileSize: number;
+}
+
+export interface I_videoMetadataFailureList {
+  total: number;
+  dataList: I_videoMetadataFailureItem[];
+}
+
+export interface I_videoMetadataManualRequest {
+  dramaSeriesId: string;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  videoCodec?: string;
+  audioCodec?: string;
 }
 
 export interface I_videoMetadataRunRequest {

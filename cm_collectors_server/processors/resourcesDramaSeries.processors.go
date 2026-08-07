@@ -120,6 +120,8 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 		newDramaSeries := make([]models.ResourcesDramaSeries, 0)
 		existingUpdates := make([]models.ResourcesDramaSeries, 0, len(dramaSeriesSlc))
 		resetFingerprintIDs := make([]string, 0)
+		staleMetadataIDs := make([]string, 0)
+		excludedMetadataIDs := make([]string, 0)
 
 		for sort, submitted := range dramaSeriesSlc {
 			var current models.ResourcesDramaSeries
@@ -148,10 +150,11 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 
 			if !found {
 				current = models.ResourcesDramaSeries{
-					ID:          core.GenerateUniqueID(),
-					ResourcesID: resourceID,
-					Src:         submitted.Src,
-					Sort:        sort,
+					ID:                    core.GenerateUniqueID(),
+					ResourcesID:           resourceID,
+					Src:                   submitted.Src,
+					Sort:                  sort,
+					VideoMetadataExcluded: utils.IsClearlyNonVideoSource(submitted.Src),
 				}
 				newDramaSeries = append(newDramaSeries, current)
 				matched[current.ID] = struct{}{}
@@ -160,13 +163,22 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 
 			matched[current.ID] = struct{}{}
 			pathChanged := current.Src != submitted.Src
+			classificationChanged := current.VideoMetadataExcluded != utils.IsClearlyNonVideoSource(submitted.Src)
 			current.Src = submitted.Src
 			current.Sort = sort
+			current.VideoMetadataExcluded = utils.IsClearlyNonVideoSource(submitted.Src)
 			existingUpdates = append(existingUpdates, current)
-			if !pathChanged {
+			if !pathChanged && !classificationChanged {
 				continue
 			}
-			resetFingerprintIDs = append(resetFingerprintIDs, current.ID)
+			if pathChanged {
+				resetFingerprintIDs = append(resetFingerprintIDs, current.ID)
+			}
+			if current.VideoMetadataExcluded {
+				excludedMetadataIDs = append(excludedMetadataIDs, current.ID)
+			} else {
+				staleMetadataIDs = append(staleMetadataIDs, current.ID)
+			}
 		}
 
 		// 资源可能包含大量分集，按块批量更新路径和排序，避免逐条执行 SQL。
@@ -177,19 +189,22 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 				tx,
 				models.ResourcesDramaSeries{}.TableName(),
 				"id",
-				[]string{"src", "sort"},
+				[]string{"src", "sort", "video_metadata_excluded"},
 				existingUpdates[start:end],
 				func(item models.ResourcesDramaSeries) map[string]interface{} {
-					return map[string]interface{}{"id": item.ID, "src": item.Src, "sort": item.Sort}
+					return map[string]interface{}{
+						"id": item.ID, "src": item.Src, "sort": item.Sort,
+						"video_metadata_excluded": item.VideoMetadataExcluded,
+					}
 				},
 			); err != nil {
 				return err
 			}
 		}
-		if len(resetFingerprintIDs) > 0 {
+		if len(staleMetadataIDs) > 0 {
 			// 路径变化时保留上一次采集值，仅将可重新生成的视频信息标记为失效。
 			if err := tx.Model(&models.ResourcesVideoMetadata{}).
-				Where("drama_series_id IN ?", resetFingerprintIDs).
+				Where("drama_series_id IN ?", staleMetadataIDs).
 				Updates(map[string]interface{}{
 					"probe_status":     models.VideoMetadataStatusStale,
 					"metadata_version": 0,
@@ -197,6 +212,17 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 					"retry_count":      0,
 					"error_code":       "",
 					"error_message":    "",
+				}).Error; err != nil {
+				return err
+			}
+		}
+		if len(excludedMetadataIDs) > 0 {
+			if err := (models.ResourcesVideoMetadata{}).DeleteByDramaSeriesIDs(tx, excludedMetadataIDs); err != nil {
+				return err
+			}
+			if err := tx.Model(&models.ResourcesDramaSeries{}).Where("id IN ?", excludedMetadataIDs).
+				Updates(map[string]interface{}{
+					"durationSeconds": 0, "durationProbeStatus": "", "durationProbeTime": nil,
 				}).Error; err != nil {
 				return err
 			}
@@ -260,7 +286,10 @@ func (ResourcesDramaSeries) SortBySrc(resourceID string) error {
 
 func (ResourcesDramaSeries) Create(tx *gorm.DB, resourceID, src string, sort int) error {
 	return models.ResourcesDramaSeries{}.Creates(tx, &[]models.ResourcesDramaSeries{
-		{ID: core.GenerateUniqueID(), ResourcesID: resourceID, Src: src, Sort: sort},
+		{
+			ID: core.GenerateUniqueID(), ResourcesID: resourceID, Src: src, Sort: sort,
+			VideoMetadataExcluded: utils.IsClearlyNonVideoSource(src),
+		},
 	})
 }
 

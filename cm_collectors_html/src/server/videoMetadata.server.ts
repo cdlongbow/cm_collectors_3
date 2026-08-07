@@ -2,6 +2,9 @@ import request from '@/assets/request';
 import type {
   I_videoMetadata,
   I_videoMetadataBatchTask,
+  I_videoMetadataFailureList,
+  I_videoMetadataFailureQuery,
+  I_videoMetadataManualRequest,
   I_videoMetadataRunRequest,
   I_videoMetadataSettingData,
   I_videoMetadataStats,
@@ -26,6 +29,25 @@ export const videoMetadataServer = {
   info: async (dramaSeriesId: string) => request<I_videoMetadata>({
     url: `${routerGroupUri}/info/${dramaSeriesId}`,
     method: 'get',
+  }),
+  failures: async (data: I_videoMetadataFailureQuery) => request<I_videoMetadataFailureList>({
+    url: `${routerGroupUri}/failures`,
+    method: 'post',
+    data,
+  }),
+  retryFailure: async (dramaSeriesId: string) => request<boolean>({
+    url: `${routerGroupUri}/retry/${dramaSeriesId}`,
+    method: 'post',
+  }),
+  setClassification: async (dramaSeriesId: string, isVideo: boolean) => request<boolean>({
+    url: `${routerGroupUri}/classification`,
+    method: 'put',
+    data: { dramaSeriesId, isVideo },
+  }),
+  saveManual: async (data: I_videoMetadataManualRequest) => request<I_videoMetadata>({
+    url: `${routerGroupUri}/manual`,
+    method: 'put',
+    data,
   }),
   run: async (data: I_videoMetadataRunRequest) => request<I_videoMetadataBatchTask>({
     url: `${routerGroupUri}/run`,

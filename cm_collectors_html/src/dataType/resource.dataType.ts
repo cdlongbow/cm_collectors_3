@@ -8,6 +8,7 @@ export interface I_resource_base {
   filesBases_id: string;
   mode: E_resourceDramaSeriesType;
   title: string;
+  subtitle: string;
   issueNumber: string;
   coverPoster: string;
   coverPosterMode: number;
@@ -52,7 +53,8 @@ export interface I_resourceDramaSeries extends I_resourceDramaSeries_base {
   sort: number;
   storageLocation: E_resourceStorageLocation;
   durationSeconds: number;
-  durationProbeStatus: '' | 'success' | 'failed';
+  durationProbeStatus: '' | 'success' | 'failed' | 'manual';
+  videoMetadataExcluded: boolean;
   durationProbeTime: string;
   m3u8BuilderTime: string;
   m3u8BuilderStatus: boolean;
