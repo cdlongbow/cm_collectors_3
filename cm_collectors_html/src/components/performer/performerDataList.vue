@@ -1,7 +1,23 @@
 <template>
   <div class="performer-data-list">
-    <performerInfo class="performer-info" v-if="props.showPerformerInfo" :performer="currentShowPerformer">
+    <performerInfo class="performer-info" v-if="props.showPerformerInfo && !batchMode" :performer="currentShowPerformer">
     </performerInfo>
+    <aside v-else-if="props.showPerformerInfo" class="performer-batch-summary">
+      <h3>批量管理</h3>
+      <div class="batch-summary-count">已选择 <strong>{{ selectedPerformerIds.size }}</strong> 位演员</div>
+      <el-scrollbar class="batch-selected-scrollbar">
+        <div v-for="performer in selectedPerformers_C" :key="performer.id" class="batch-selected-item">
+          <el-image :src="getPerformerPhoto(performer)" fit="cover" />
+          <span :title="performer.name">{{ performer.name }}</span>
+          <el-button link icon="Close" aria-label="取消选择" @click="togglePerformerSelection(performer)" />
+        </div>
+        <div v-if="selectedPerformerIds.size > selectedPerformers_C.length" class="batch-selected-overflow">
+          还有 {{ selectedPerformerIds.size - selectedPerformers_C.length }} 位演员已选择
+        </div>
+        <el-empty v-if="selectedPerformerIds.size === 0" description="点击演员卡片进行选择" :image-size="70" />
+      </el-scrollbar>
+      <div class="batch-selection-tip">点击卡片选择，按住 Shift 可连续选择本页演员。</div>
+    </aside>
     <div class="performer-container">
       <div class="performer-index">
         <span v-for="item, index in indexChars" :key="index" :class="{ 'select-index': item === selectIndex }"
@@ -10,14 +26,26 @@
         </span>
       </div>
       <div class="performer-container-main">
-        <performerSearch class="performer-search-toolbar" :admin="true" :performer-bases-id="props.performerBasesId" @add="addPerformerHandle" @recycleBin="recycleBinHandle"
-          @search="changeSearchHandle" @scraper="scraperHandle" @avatarBatch="avatarBatchHandle">
+        <performerSearch class="performer-search-toolbar" :admin="true" :performer-bases-id="props.performerBasesId"
+          :batch-mode="batchMode" :selection-count="selectedPerformerIds.size" :total="dataCount" :selecting-all="selectingAll"
+          @add="addPerformerHandle" @recycleBin="recycleBinHandle" @search="changeSearchHandle" @scraper="scraperHandle"
+          @avatarBatch="avatarBatchHandle" @batchEnter="enterBatchMode" @batchExit="exitBatchMode"
+          @selectPage="selectCurrentPage" @selectAll="selectAllFiltered" @invertPage="invertCurrentPage"
+          @clearSelection="clearSelection" @batchStars="openBatchOperation('stars')"
+          @batchMigrate="openBatchOperation('migrate')" @batchTags="openBatchOperation('tags')"
+          @batchDelete="batchDeleteHandle">
         </performerSearch>
         <div class="performer-list-main" v-loading="loading">
           <el-scrollbar>
             <ul class="performer-list" :style="{ '--performer-block-size': performerBlockSize + 'px' }">
-              <li v-for="(performer, index) in dataList" :key="index">
-                <performerRightClickMenu :performer="performer" @search="searchPerformerHandle"
+              <li v-for="(performer, index) in dataList" :key="performer.id"
+                :class="{ 'batch-card-selected': selectedPerformerIds.has(performer.id) }">
+                <div v-if="batchMode" class="performer-batch-card" @click="selectPerformerHandle(performer, index, $event)">
+                  <el-checkbox class="batch-card-checkbox" :model-value="selectedPerformerIds.has(performer.id)"
+                    @click.stop @change="togglePerformerSelection(performer)" />
+                  <performerBlock :performer="performer" :attrAge="true" :attrNationality="true" />
+                </div>
+                <performerRightClickMenu v-else :performer="performer" @search="searchPerformerHandle"
                   @avatar="avatarHandle" @edit="editPerformerHandle" @migrate="migratePerformerHanadle" @delete="deletePerformerHandle">
                   <performerBlock :performer="performer" :tool="true" :admin="true" :attrAge="true"
                     :attrNationality="true" @search="searchPerformerHandle"
@@ -51,9 +79,10 @@
   <performerAvatarLibraryDialog ref="performerAvatarLibraryDialogRef" @success="getDataListAndCount" />
   <performerAvatarLibraryBatchDialog ref="performerAvatarLibraryBatchDialogRef" :page-size="pageSize"
     @success="getDataListAndCount" />
+  <performerBatchOperationDialog ref="performerBatchOperationDialogRef" @success="batchOperationSuccess" />
 </template>
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import performerFormDrawer from '@/components/performer/performerFormDrawer.vue';
 import performerRecycleBinDialog from '@/components/performer/performerRecycleBinDialog.vue';
 import scraperPerformerDialog from '../importResource/scraperPerformerDialog.vue';
@@ -62,7 +91,7 @@ import performerInfo from '@/components/performer/performerInfo.vue';
 import performerBlock from '@/components/performer/performerBlock.vue';
 import type { I_performer, I_search_performer } from '@/dataType/performer.dataType';
 import { performerServer } from '@/server/performer.server';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { messageBoxConfirm } from '../../common/messageBox';
 import { searchStoreData } from '@/storeData/search.storeData';
 import { useRouter } from 'vue-router';
@@ -70,6 +99,8 @@ import performerRightClickMenu from './performerRightClickMenu.vue';
 import performerMigrateDialog from './performerMigrateDialog.vue';
 import performerAvatarLibraryDialog from './performerAvatarLibraryDialog.vue';
 import performerAvatarLibraryBatchDialog from './performerAvatarLibraryBatchDialog.vue';
+import performerBatchOperationDialog from './performerBatchOperationDialog.vue';
+import { getPerformerPhoto } from '@/common/photo';
 const router = useRouter()
 const store = {
   searchStoreData: searchStoreData(),
@@ -95,6 +126,7 @@ const scraperPerformerDialogRef = ref<InstanceType<typeof scraperPerformerDialog
 const performerMigrateDialogRef = ref<InstanceType<typeof performerMigrateDialog>>();
 const performerAvatarLibraryDialogRef = ref<InstanceType<typeof performerAvatarLibraryDialog>>();
 const performerAvatarLibraryBatchDialogRef = ref<InstanceType<typeof performerAvatarLibraryBatchDialog>>();
+const performerBatchOperationDialogRef = ref<InstanceType<typeof performerBatchOperationDialog>>();
 const loading = ref(false);
 const dataList = ref<I_performer[]>([]);
 const dataCount = ref(0);
@@ -125,6 +157,12 @@ let searchCondition: I_search_performer = {
 }
 
 const currentShowPerformer = ref<I_performer | undefined>(undefined);
+const batchMode = ref(false);
+const selectingAll = ref(false);
+const selectedPerformerIds = ref<Set<string>>(new Set());
+const selectedPerformerMap = ref<Map<string, I_performer>>(new Map());
+const lastSelectedPageIndex = ref<number | null>(null);
+const selectedPerformers_C = computed(() => Array.from(selectedPerformerMap.value.values()).slice(0, 100));
 
 const init = async () => {
   await getDataListAndCount(true);
@@ -157,11 +195,107 @@ const getDataList = async () => {
 }
 
 const changePageHandle = () => {
+  lastSelectedPageIndex.value = null;
   getDataList();
 }
 
 const clickPerformerHandle = (data: I_performer) => {
   currentShowPerformer.value = data;
+}
+
+const setPerformerSelected = (performer: I_performer, selected: boolean) => {
+  const ids = new Set(selectedPerformerIds.value);
+  const performers = new Map(selectedPerformerMap.value);
+  if (selected) {
+    ids.add(performer.id);
+    performers.set(performer.id, performer);
+  } else {
+    ids.delete(performer.id);
+    performers.delete(performer.id);
+  }
+  selectedPerformerIds.value = ids;
+  selectedPerformerMap.value = performers;
+}
+
+const togglePerformerSelection = (performer: I_performer) => {
+  setPerformerSelected(performer, !selectedPerformerIds.value.has(performer.id));
+}
+
+const selectPerformerHandle = (performer: I_performer, index: number, event: MouseEvent) => {
+  if (event.shiftKey && lastSelectedPageIndex.value !== null) {
+    const start = Math.min(lastSelectedPageIndex.value, index);
+    const end = Math.max(lastSelectedPageIndex.value, index);
+    const shouldSelect = !selectedPerformerIds.value.has(performer.id);
+    dataList.value.slice(start, end + 1).forEach(item => setPerformerSelected(item, shouldSelect));
+  } else {
+    togglePerformerSelection(performer);
+  }
+  lastSelectedPageIndex.value = index;
+}
+
+const enterBatchMode = () => { batchMode.value = true; };
+const clearSelection = () => {
+  selectedPerformerIds.value = new Set();
+  selectedPerformerMap.value = new Map();
+  lastSelectedPageIndex.value = null;
+};
+const exitBatchMode = () => { batchMode.value = false; clearSelection(); };
+const selectCurrentPage = () => dataList.value.forEach(item => setPerformerSelected(item, true));
+const invertCurrentPage = () => dataList.value.forEach(item => togglePerformerSelection(item));
+
+const selectAllFiltered = async () => {
+  if (dataCount.value === 0) return;
+  selectingAll.value = true;
+  try {
+    const pageCount = Math.ceil(dataCount.value / pageSize.value);
+    const selected = new Map(selectedPerformerMap.value);
+    for (let page = 1; page <= pageCount; page++) {
+      const result = await performerServer.dataList(props.performerBasesId, false, page, pageSize.value, searchCondition, props.countFilesBasesId);
+      if (!result?.status) throw new Error(result?.msg || '读取筛选结果失败');
+      result.data.dataList.forEach(item => selected.set(item.id, item));
+    }
+    selectedPerformerMap.value = selected;
+    selectedPerformerIds.value = new Set(selected.keys());
+    ElMessage.success(`已选择全部 ${dataCount.value} 位筛选结果`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '读取筛选结果失败');
+  } finally {
+    selectingAll.value = false;
+  }
+}
+
+const selectedIDsOrWarn = () => {
+  const ids = Array.from(selectedPerformerIds.value);
+  if (ids.length === 0) ElMessage.warning('请先选择演员');
+  return ids;
+}
+
+const openBatchOperation = (action: 'stars' | 'migrate' | 'tags') => {
+  const ids = selectedIDsOrWarn();
+  if (ids.length > 0) performerBatchOperationDialogRef.value?.open(action, ids, props.performerBasesId);
+}
+
+const batchDeleteHandle = async () => {
+  const ids = selectedIDsOrWarn();
+  if (ids.length === 0) return;
+  try {
+    await ElMessageBox.confirm(`将把选中的 ${ids.length} 位演员移入回收站，是否继续？`, '批量删除演员', {
+      type: 'warning', confirmButtonText: '移入回收站',
+    });
+  } catch { return; }
+  try {
+    const result = await performerServer.batchUpdateStatus(ids, false);
+    if (!result.status) return ElMessage.error(result.msg || '批量删除失败');
+    ElMessage.success(`已将 ${result.data.updated} 位演员移入回收站`);
+    await batchOperationSuccess();
+  } catch {
+    ElMessage.error('批量删除失败，请稍后重试');
+  }
+}
+
+const batchOperationSuccess = async () => {
+  clearSelection();
+  await getDataListAndCount(true);
 }
 
 const searchPerformerHandle = (data: I_performer) => {
@@ -210,12 +344,14 @@ const changeSearchHandle = (search: I_search_performer) => {
   searchCondition = search;
   currentPage.value = 1;
   fetchCount = true;
+  clearSelection();
   getDataList();
 }
 const selectCharIndexHandle = (charIndex: string) => {
   selectIndex.value = charIndex;
   currentPage.value = 1;
   fetchCount = true;
+  clearSelection();
   getDataList();
 }
 
@@ -254,6 +390,41 @@ onMounted(async () => {
     flex-shrink: 0;
     width: 260px;
     height: 100%;
+  }
+
+  .performer-batch-summary {
+    flex: 0 0 260px;
+    min-width: 0;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 10px;
+    border: 1px solid var(--el-border-color);
+    border-radius: 6px;
+    background: var(--el-bg-color-overlay);
+    color: var(--el-text-color-primary);
+
+    h3 { margin: 0; color: var(--el-color-primary); }
+    .batch-summary-count { padding-bottom: 8px; border-bottom: 1px solid var(--el-border-color); color: var(--el-text-color-regular); }
+    .batch-selected-scrollbar { flex: 1; min-height: 0; }
+    .batch-selected-item {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) 28px;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 7px;
+      padding: 6px;
+      border: 1px solid var(--el-border-color-lighter);
+      border-radius: 5px;
+      background: var(--el-bg-color);
+      font-size: 13px;
+    }
+    .batch-selected-item .el-image { width: 38px; height: 38px; border-radius: 50%; }
+    .batch-selected-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .batch-selected-overflow { padding: 8px; text-align: center; color: var(--el-text-color-secondary); font-size: 12px; }
+    .batch-selection-tip { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
   }
 
   .performer-container {
@@ -322,6 +493,34 @@ onMounted(async () => {
           li {
             width: var(--performer-block-size);
           }
+
+          .performer-batch-card {
+            position: relative;
+            border: 2px solid transparent;
+            border-radius: 7px;
+            box-sizing: border-box;
+            transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+          }
+
+          .performer-batch-card:hover { border-color: var(--el-color-primary-light-5); }
+          .batch-card-selected .performer-batch-card {
+            border-color: var(--el-color-primary);
+            background: var(--el-color-primary-light-9);
+            box-shadow: 0 0 0 1px var(--el-color-primary-light-7);
+          }
+
+          .batch-card-checkbox {
+            position: absolute;
+            top: 7px;
+            left: 7px;
+            z-index: 5;
+            width: 19px;
+            height: 19px;
+            padding: 1px;
+            border-radius: 3px;
+            background: var(--el-bg-color-overlay);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          }
         }
       }
 
@@ -341,4 +540,11 @@ onMounted(async () => {
     }
   }
 }
+
+:global(html.dark) .performer-batch-summary { border-color: #414243; background: #202225; color: #e5eaf3; }
+:global(html.dark) .performer-batch-summary .batch-selected-item { border-color: #414243; background: #1d1e1f; }
+:global(html.dark) .batch-card-selected .performer-batch-card { border-color: #409eff; background: #18222c; box-shadow: 0 0 0 1px #245b86; }
+:global(html.bright) .performer-batch-summary { border-color: #dcdfe6; background: #ffffff; color: #303133; }
+:global(html.bright) .performer-batch-summary .batch-selected-item { border-color: #e4e7ed; background: #f7f8fa; }
+:global(html.bright) .batch-card-selected .performer-batch-card { border-color: #409eff; background: #ecf5ff; box-shadow: 0 0 0 1px #a0cfff; }
 </style>

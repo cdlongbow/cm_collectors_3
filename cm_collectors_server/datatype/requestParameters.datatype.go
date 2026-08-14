@@ -229,6 +229,32 @@ type ReqParam_MigratePerformer struct {
 	PerformerBasesId string `json:"performerBasesId"`
 }
 
+type ReqParam_PerformerBatchIDs struct {
+	PerformerIds []string `json:"performerIds" binding:"required"`
+}
+
+type ReqParam_PerformerBatchStars struct {
+	PerformerIds []string `json:"performerIds" binding:"required"`
+	Stars        int      `json:"stars"`
+}
+
+type ReqParam_PerformerBatchStatus struct {
+	PerformerIds []string `json:"performerIds" binding:"required"`
+	Status       bool     `json:"status"`
+}
+
+type ReqParam_PerformerBatchMigrate struct {
+	PerformerIds     []string `json:"performerIds" binding:"required"`
+	PerformerBasesId string   `json:"performerBasesId" binding:"required"`
+}
+
+type ReqParam_PerformerBatchTags struct {
+	PerformerIds     []string `json:"performerIds" binding:"required"`
+	PerformerBasesId string   `json:"performerBasesId" binding:"required"`
+	TagIds           []string `json:"tagIds"`
+	Mode             string   `json:"mode" binding:"required,oneof=add remove replace"`
+}
+
 // 请求参数 - 修改TagClass
 type ReqParam_TagClass struct {
 	ID           string `json:"id"`

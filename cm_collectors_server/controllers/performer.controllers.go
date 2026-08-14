@@ -142,6 +142,54 @@ func (Performer) UpdatePerformerStatus(c *gin.Context) {
 	response.OkWithData(true, c)
 }
 
+func (Performer) BatchSetStars(c *gin.Context) {
+	var par datatype.ReqParam_PerformerBatchStars
+	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
+		return
+	}
+	result, err := processors.Performer{}.BatchSetStars(par.PerformerIds, par.Stars)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(result, c)
+}
+
+func (Performer) BatchUpdateStatus(c *gin.Context) {
+	var par datatype.ReqParam_PerformerBatchStatus
+	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
+		return
+	}
+	result, err := processors.Performer{}.BatchUpdateStatus(par.PerformerIds, par.Status)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(result, c)
+}
+
+func (Performer) BatchSetTags(c *gin.Context) {
+	var par datatype.ReqParam_PerformerBatchTags
+	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
+		return
+	}
+	result, err := processors.Performer{}.BatchSetTags(par.PerformerIds, par.TagIds, par.PerformerBasesId, par.Mode)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(result, c)
+}
+
+func (Performer) BatchMigrate(c *gin.Context) {
+	var par datatype.ReqParam_PerformerBatchMigrate
+	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
+		return
+	}
+	result, err := processors.Performer{}.BatchMigrate(par.PerformerIds, par.PerformerBasesId)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(result, c)
+}
+
 func (Performer) PerformerBasesUpdate(c *gin.Context) {
 	var par datatype.ReqParam_UpdatePerformerBases
 	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {

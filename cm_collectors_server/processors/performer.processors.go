@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Performer struct{}
@@ -338,6 +339,164 @@ func (t Performer) CreateByModelsPerformer_DB(db *gorm.DB, info *models.Performe
 
 func (t Performer) UpdatePerformerStatus(id string, status bool) error {
 	return models.Performer{}.Update(core.DBS(), &models.Performer{ID: id, Status: status}, []string{"status"})
+}
+
+type PerformerBatchResult struct {
+	Updated int64 `json:"updated"`
+}
+
+func normalizePerformerIDs(ids []string) []string {
+	result := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func (Performer) BatchSetStars(ids []string, stars int) (*PerformerBatchResult, error) {
+	if stars < 0 || stars > 5 {
+		return nil, errors.New("演员评星必须在 0 到 5 之间")
+	}
+	ids = normalizePerformerIDs(ids)
+	if len(ids) == 0 {
+		return nil, errors.New("请选择演员")
+	}
+	result := core.DBS().Model(&models.Performer{}).Where("id IN ? AND status = ?", ids, true).Update("stars", stars)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &PerformerBatchResult{Updated: result.RowsAffected}, nil
+}
+
+func (Performer) BatchUpdateStatus(ids []string, status bool) (*PerformerBatchResult, error) {
+	ids = normalizePerformerIDs(ids)
+	if len(ids) == 0 {
+		return nil, errors.New("请选择演员")
+	}
+	result := core.DBS().Model(&models.Performer{}).Where("id IN ?", ids).Update("status", status)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &PerformerBatchResult{Updated: result.RowsAffected}, nil
+}
+
+func (Performer) BatchSetTags(ids, tagIDs []string, performerBasesID, mode string) (*PerformerBatchResult, error) {
+	ids = normalizePerformerIDs(ids)
+	tagIDs = normalizePerformerIDs(tagIDs)
+	if len(ids) == 0 {
+		return nil, errors.New("请选择演员")
+	}
+	if mode != "add" && mode != "remove" && mode != "replace" {
+		return nil, errors.New("不支持的演员标签操作")
+	}
+	if mode != "replace" && len(tagIDs) == 0 {
+		return nil, errors.New("请选择演员标签")
+	}
+	db := core.DBS()
+	var performerCount int64
+	if err := db.Model(&models.Performer{}).
+		Where("id IN ? AND performerBases_id = ? AND status = ?", ids, performerBasesID, true).
+		Count(&performerCount).Error; err != nil {
+		return nil, err
+	}
+	if performerCount != int64(len(ids)) {
+		return nil, errors.New("所选演员已变化或不属于当前演员集，请刷新后重试")
+	}
+	if err := validatePerformerTagIDs(db, performerBasesID, tagIDs); err != nil {
+		return nil, err
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		switch mode {
+		case "remove":
+			return tx.Where("performer_id IN ? AND performer_tag_id IN ?", ids, tagIDs).Delete(&models.PerformersTags{}).Error
+		case "replace":
+			if err := tx.Where("performer_id IN ?", ids).Delete(&models.PerformersTags{}).Error; err != nil {
+				return err
+			}
+		}
+		if len(tagIDs) == 0 {
+			return nil
+		}
+		relations := make([]models.PerformersTags, 0, len(ids)*len(tagIDs))
+		for _, performerID := range ids {
+			for _, tagID := range tagIDs {
+				relations = append(relations, models.PerformersTags{PerformerID: performerID, PerformerTagID: tagID})
+			}
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &PerformerBatchResult{Updated: int64(len(ids))}, nil
+}
+
+func (t Performer) BatchMigrate(ids []string, performerBasesID string) (*PerformerBatchResult, error) {
+	ids = normalizePerformerIDs(ids)
+	if len(ids) == 0 {
+		return nil, errors.New("请选择演员")
+	}
+	db := core.DBS()
+	var targetCount int64
+	if err := db.Model(&models.PerformerBases{}).Where("id = ? AND status = ?", performerBasesID, true).Count(&targetCount).Error; err != nil {
+		return nil, err
+	}
+	if targetCount == 0 {
+		return nil, errors.New("目标演员集不存在或已停用")
+	}
+	var performers []models.Performer
+	if err := db.Where("id IN ? AND status = ?", ids, true).Find(&performers).Error; err != nil {
+		return nil, err
+	}
+	if len(performers) != len(ids) {
+		return nil, errors.New("所选演员已变化，请刷新后重试")
+	}
+	for _, performer := range performers {
+		if performer.PerformerBasesID == performerBasesID {
+			return nil, errors.New("目标演员集不能与当前演员集相同")
+		}
+	}
+
+	type movedPhoto struct{ oldBaseID, photo string }
+	moved := make([]movedPhoto, 0, len(performers))
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("performer_id IN ?", ids).Delete(&models.PerformersTags{}).Error; err != nil {
+			return err
+		}
+		createdAt := datatype.CustomTime(core.TimeNow())
+		if err := tx.Model(&models.Performer{}).Where("id IN ?", ids).Updates(map[string]any{
+			"performerBases_id": performerBasesID,
+			"addTime":           &createdAt,
+		}).Error; err != nil {
+			return err
+		}
+		for _, performer := range performers {
+			if performer.Photo == "" {
+				continue
+			}
+			if err := t.MovePerformerPhoto(performer.PerformerBasesID, performerBasesID, performer.Photo); err != nil {
+				for i := len(moved) - 1; i >= 0; i-- {
+					_ = t.MovePerformerPhoto(performerBasesID, moved[i].oldBaseID, moved[i].photo)
+				}
+				return err
+			}
+			moved = append(moved, movedPhoto{oldBaseID: performer.PerformerBasesID, photo: performer.Photo})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &PerformerBatchResult{Updated: int64(len(ids))}, nil
 }
 
 // Update 更新表演者数据

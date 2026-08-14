@@ -115,5 +115,17 @@ export const performerServer = {
         performerBasesId,
       },
     });
-  }
+  },
+  batchSetStars: async (performerIds: string[], stars: number) => request<{ updated: number }>({
+    url: `${routerGroupUri}/performer/batchSetStars`, method: 'put', data: { performerIds, stars },
+  }),
+  batchUpdateStatus: async (performerIds: string[], status: boolean) => request<{ updated: number }>({
+    url: `${routerGroupUri}/performer/batchUpdateStatus`, method: 'put', data: { performerIds, status },
+  }),
+  batchSetTags: async (performerIds: string[], performerBasesId: string, tagIds: string[], mode: 'add' | 'remove' | 'replace') => request<{ updated: number }>({
+    url: `${routerGroupUri}/performer/batchSetTags`, method: 'put', data: { performerIds, performerBasesId, tagIds, mode },
+  }),
+  batchMigrate: async (performerIds: string[], performerBasesId: string) => request<{ updated: number }>({
+    url: `${routerGroupUri}/performer/batchMigrate`, method: 'post', data: { performerIds, performerBasesId },
+  }),
 }
