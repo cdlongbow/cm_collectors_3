@@ -64,7 +64,7 @@ import contentList from '@/components/content/contentList.vue'
 import contentListAdmin from '@/components/content/contentListAdmin.vue';
 import coverAdjuster from '@/components/setting/fileDatabaseSetting/coverAdjuster.vue';
 import playListBtn from '@/components/playList/playListBtn.vue';
-import { ref, onMounted, watch, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { appStoreData } from '@/storeData/app.storeData';
 import { searchStoreData } from '@/storeData/search.storeData';
 import type { I_resource, I_resourceFileSizeStats } from '@/dataType/resource.dataType';
@@ -72,6 +72,7 @@ import { ElMessage } from 'element-plus';
 import { resourceServer } from '@/server/resource.server';
 import { debounce } from '@/assets/debounce';
 import { E_searchSort } from '@/dataType/search.dataType';
+import { eventBus } from '@/main';
 const store = {
   appStoreData: appStoreData(),
   searchStoreData: searchStoreData(),
@@ -291,8 +292,16 @@ const selectResourcesHandle = (item: I_resource) => {
   emits('selectResources', item, false)
 }
 
+const resourceAddTimeExchangedHandle = () => {
+  init_DataList();
+}
+
 onMounted(async () => {
+  eventBus.on('resource-add-time-exchanged', resourceAddTimeExchangedHandle);
   await init()
+})
+onUnmounted(() => {
+  eventBus.off('resource-add-time-exchanged', resourceAddTimeExchangedHandle);
 })
 defineExpose({ init, init_DataList, showDataList });
 </script>

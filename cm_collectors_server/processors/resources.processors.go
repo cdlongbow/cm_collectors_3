@@ -361,6 +361,14 @@ func (t Resources) PinToTop(resourceId string, pinToTopStatus bool) error {
 	}
 	return err
 }
+
+func (Resources) SwapAddTime(resourceID, otherResourceID string) error {
+	err := (models.Resources{}).SwapAddTime(core.DBS(), resourceID, otherResourceID)
+	if err == nil {
+		AutoBackup{}.RecordResourceChanges(2)
+	}
+	return err
+}
 func (t Resources) DeleteResource(resourceId string) error {
 	info, err := t.Info(resourceId)
 	if err != nil {

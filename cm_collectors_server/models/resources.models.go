@@ -632,6 +632,48 @@ func (Resources) Update(db *gorm.DB, resources *Resources, fields []string) erro
 	}
 	return result.Error
 }
+
+// SwapAddTime 交换同一文件库中两个未置顶资源的添加时间。
+// 该操作只改变时间排序下的展示位置，不处理置顶顺序。
+func (Resources) SwapAddTime(db *gorm.DB, resourceID, otherResourceID string) error {
+	if resourceID == "" || otherResourceID == "" || resourceID == otherResourceID {
+		return fmt.Errorf("请选择两个不同的资源")
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var resources []Resources
+		if err := tx.Select("id", "filesBases_id", "pin_to_top", "addTime").
+			Where("id IN ?", []string{resourceID, otherResourceID}).Find(&resources).Error; err != nil {
+			return err
+		}
+		if len(resources) != 2 {
+			return fmt.Errorf("资源不存在或已被删除")
+		}
+		byID := make(map[string]Resources, 2)
+		for _, resource := range resources {
+			byID[resource.ID] = resource
+		}
+		resource := byID[resourceID]
+		otherResource := byID[otherResourceID]
+		if resource.FilesBasesID != otherResource.FilesBasesID {
+			return fmt.Errorf("只能交换同一文件库资源的添加时间")
+		}
+		if resource.PinToTop != 0 || otherResource.PinToTop != 0 {
+			return fmt.Errorf("置顶资源不能交换添加时间")
+		}
+		if resource.CreatedAt == nil || otherResource.CreatedAt == nil {
+			return fmt.Errorf("资源添加时间为空，无法交换")
+		}
+		if *resource.CreatedAt == *otherResource.CreatedAt {
+			return fmt.Errorf("两个资源的添加时间相同，无法交换")
+		}
+		if err := tx.Model(&Resources{}).Where("id = ?", resourceID).
+			Update("addTime", otherResource.CreatedAt).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Resources{}).Where("id = ?", otherResourceID).
+			Update("addTime", resource.CreatedAt).Error
+	})
+}
 func (Resources) Create(db *gorm.DB, resources *Resources) error {
 	return db.Create(&resources).Error
 }

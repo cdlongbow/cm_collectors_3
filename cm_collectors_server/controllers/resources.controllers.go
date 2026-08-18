@@ -232,6 +232,17 @@ func (Resource) PinToTop(c *gin.Context) {
 	}
 	response.OkWithData(true, c)
 }
+func (Resource) SwapAddTime(c *gin.Context) {
+	var par datatype.ReqParam_ResourceSwapAddTime
+	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
+		return
+	}
+	err := processors.Resources{}.SwapAddTime(par.ResourceID, par.OtherResourceID)
+	if err := ResError(c, err); err != nil {
+		return
+	}
+	response.OkWithData(true, c)
+}
 func (Resource) ListDeletedResource(c *gin.Context) {
 	idsStr := c.Query("filesBasesIds")
 	filesBasesIds := []string{}

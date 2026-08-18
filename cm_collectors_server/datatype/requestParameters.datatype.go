@@ -99,6 +99,11 @@ type ReqParam_ResourcePinToTop struct {
 	PinToTopStatus bool   `json:"pinToTopStatus"`
 }
 
+type ReqParam_ResourceSwapAddTime struct {
+	ResourceID      string `json:"resourceId" binding:"required"`
+	OtherResourceID string `json:"otherResourceId" binding:"required"`
+}
+
 // 请求参数 - 创建filesBases
 type ReqParam_CreateFilesBases struct {
 	Name                     string   `json:"name" binding:"required"`

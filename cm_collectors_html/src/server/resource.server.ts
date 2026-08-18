@@ -175,6 +175,13 @@ export const resourceServer = {
       },
     });
   },
+  swapAddTime: async (resourceId: string, otherResourceId: string) => {
+    return await request<boolean>({
+      url: `${routerGroupUri}/resource/swapAddTime`,
+      method: 'put',
+      data: { resourceId, otherResourceId },
+    });
+  },
   delete: async (id: string) => {
     return await request<boolean>({
       url: `${routerGroupUri}/resource/delete/${id}`,

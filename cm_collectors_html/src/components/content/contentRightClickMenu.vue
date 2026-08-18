@@ -10,7 +10,7 @@ import { playOpenResourceFolder, playResource } from '@/common/play'
 import { resourceDelete } from '@/common/resource'
 import contentMenu from '@/components/com/tool/rightMenu/contentMenu.vue'
 import type { I_resource } from '@/dataType/resource.dataType'
-import { computed, type PropType } from 'vue'
+import { computed, inject, type PropType, type Ref } from 'vue'
 import { eventBus } from "@/main";
 import { appStoreData } from '@/storeData/app.storeData';
 import { playListAdd } from '@/common/playList'
@@ -18,8 +18,12 @@ import { tvboxRecommendServer } from '@/server/tvboxRecommend.server'
 import { ElMessage } from 'element-plus'
 import { ElMessageBox } from 'element-plus'
 import { videoTranscodeServer } from '@/server/videoTranscode.server'
+import { resourceServer } from '@/server/resource.server'
+import { searchStoreData } from '@/storeData/search.storeData'
+import { E_searchSort } from '@/dataType/search.dataType'
 const store = {
   appStoreData: appStoreData(),
+  searchStoreData: searchStoreData(),
 }
 const props = defineProps({
   resource: {
@@ -27,6 +31,55 @@ const props = defineProps({
     required: true,
   },
 })
+
+const resourceListPage = inject<Ref<I_resource[]> | undefined>('resource-list-page', undefined)
+const resourceIndex_C = computed(() => resourceListPage?.value.findIndex(item => item.id === props.resource.id) ?? -1)
+const isAddTimeSort_C = computed(() => [E_searchSort.AddTimeAsc, E_searchSort.AddTimeDesc]
+  .includes(store.searchStoreData.searchData.sort))
+const hasResourceFilter_C = computed(() => {
+  const searchData = store.searchStoreData.searchData
+  const fixedGroups = [
+    searchData.country,
+    searchData.definition,
+    searchData.videoCodec,
+    searchData.year,
+    searchData.star,
+    searchData.performer,
+    searchData.cup,
+  ]
+  return searchData.searchTextSlc.length > 0
+    || fixedGroups.some(group => group.options.length > 0)
+    || Object.values(searchData.tag).some(group => group.options.length > 0)
+})
+const canShowSwapAddTime_C = computed(() => !!resourceListPage
+  && isAddTimeSort_C.value
+  && !hasResourceFilter_C.value
+  && props.resource.pinToTop === 0)
+const previousResource_C = computed(() => {
+  if (!canShowSwapAddTime_C.value || resourceIndex_C.value <= 0) return undefined
+  const item = resourceListPage?.value[resourceIndex_C.value - 1]
+  return item?.pinToTop === 0 ? item : undefined
+})
+const nextResource_C = computed(() => {
+  if (!canShowSwapAddTime_C.value || resourceIndex_C.value < 0) return undefined
+  const item = resourceListPage?.value[resourceIndex_C.value + 1]
+  return item?.pinToTop === 0 ? item : undefined
+})
+
+const swapAddTimeHandle = async (otherResource: I_resource | undefined) => {
+  if (!otherResource) return
+  try {
+    const result = await resourceServer.swapAddTime(props.resource.id, otherResource.id)
+    if (result?.status) {
+      ElMessage.success('交换成功')
+      eventBus.emit('resource-add-time-exchanged')
+    } else {
+      ElMessage.error(result?.msg || '交换添加时间失败')
+    }
+  } catch {
+    ElMessage.error('交换添加时间失败')
+  }
+}
 
 
 const contentMenuItems_C = computed(() => {
@@ -60,6 +113,20 @@ const contentMenuItems_C = computed(() => {
         separator: true
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
+      ...(canShowSwapAddTime_C.value ? [{
+        label: '与上项换时间',
+        icon: 'Top',
+        disabled: !previousResource_C.value,
+        handler: () => swapAddTimeHandle(previousResource_C.value),
+      }, {
+        label: '与下项换时间',
+        icon: 'Bottom',
+        disabled: !nextResource_C.value,
+        handler: () => swapAddTimeHandle(nextResource_C.value),
+      }, {
+        separator: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any] : []),
       {
         label: '编辑',
         icon: 'Edit',

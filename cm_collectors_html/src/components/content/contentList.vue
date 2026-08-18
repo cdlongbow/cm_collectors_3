@@ -44,7 +44,7 @@ import layoutShortVideo from './layoutShortVideo.vue';
 import layoutShortVideoTopBottom from './layoutShortVideoTopBottom.vue';
 import layoutTable from './layoutTable.vue';
 import type { I_resource } from '@/dataType/resource.dataType';
-import { ref, computed, type PropType } from 'vue';
+import { ref, computed, provide, type PropType } from 'vue';
 import { appStoreData } from '@/storeData/app.storeData';
 import { A_layoutCoverPosterSlc, type T_resourcesShowMode } from '@/dataType/app.dataType';
 
@@ -57,6 +57,7 @@ const props = defineProps({
     default: () => [],
   },
 })
+provide('resource-list-page', computed(() => props.dataList));
 const emits = defineEmits(['selectResources']);
 
 const layoutCoverPosterRef = ref<typeof layoutCoverPoster>();

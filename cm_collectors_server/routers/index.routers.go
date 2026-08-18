@@ -148,6 +148,7 @@ func AdminRouter(router *gin.Engine) {
 	routerGroup.PUT("resource/batchSetTag", controllers.Resource{}.BatchSetTag)
 	routerGroup.PUT("resource/batchSetStars", controllers.Resource{}.BatchSetStars)
 	routerGroup.PUT("resource/pinToTop", controllers.Resource{}.PinToTop)
+	routerGroup.PUT("resource/swapAddTime", controllers.Resource{}.SwapAddTime)
 	routerGroup.GET("resource/deleted/list", controllers.Resource{}.ListDeletedResource)
 	routerGroup.DELETE("resource/delete/:resourceId", controllers.Resource{}.DeleteResource)
 	routerGroup.POST("resourceDramaSeries/searchPath", controllers.ResourceDramaSeries{}.SearchPath)
