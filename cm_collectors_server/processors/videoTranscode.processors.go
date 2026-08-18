@@ -162,11 +162,45 @@ const videoTransitionPreviewCacheMaxAge = 7 * 24 * time.Hour
 const videoTransitionPreviewCacheMaxBytes int64 = 512 << 20
 
 var videoTransitionPreviewMu sync.Mutex
+var videoTransitionLegacyCacheCleanupOnce sync.Once
 
 type videoTransitionPreviewCacheFile struct {
 	path    string
 	size    int64
 	modTime time.Time
+}
+
+func applicationCachePath(parts ...string) (string, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("获取软件根目录失败: %w", err)
+	}
+	cacheRoot := filepath.Join(filepath.Dir(executablePath), "runtime", "cache")
+	return filepath.Join(append([]string{cacheRoot}, parts...)...), nil
+}
+
+func cleanupLegacyVideoTransitionPreviewCache(currentCacheRoot string) {
+	videoTransitionLegacyCacheCleanupOnce.Do(func() {
+		userCacheRoot, err := os.UserCacheDir()
+		if err != nil {
+			return
+		}
+		legacyRoot := filepath.Join(userCacheRoot, "cm_collectors_3", "transition-previews")
+		if filepath.Clean(legacyRoot) == filepath.Clean(currentCacheRoot) {
+			return
+		}
+		entries, err := os.ReadDir(legacyRoot)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".webm") {
+				continue
+			}
+			_ = os.Remove(filepath.Join(legacyRoot, entry.Name()))
+		}
+		_ = os.Remove(legacyRoot)
+	})
 }
 
 type videoTranscodeVerifyResult struct {
@@ -1279,14 +1313,14 @@ func (VideoTranscode) TransitionPreview(
 		left.Start, left.End, right.Start, right.End,
 		left.Transition.Type, left.Transition.Duration, left.Transition.AudioFade,
 	)
-	cacheRoot, err := os.UserCacheDir()
+	cacheRoot, err := applicationCachePath("video-transcode", "transition-previews")
 	if err != nil {
-		cacheRoot = os.TempDir()
+		return "", err
 	}
-	cacheRoot = filepath.Join(cacheRoot, "cm_collectors_3", "transition-previews")
 	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
 		return "", fmt.Errorf("创建转场预览缓存目录失败: %w", err)
 	}
+	cleanupLegacyVideoTransitionPreviewCache(cacheRoot)
 	previewPath := filepath.Join(cacheRoot, fmt.Sprintf("%x.webm", sha256.Sum256([]byte(identity))))
 	videoTransitionPreviewMu.Lock()
 	defer videoTransitionPreviewMu.Unlock()

@@ -62,14 +62,14 @@ func sqlite3Connect(loggerLevel logger.LogLevel) *gorm.DB {
 	if _, err := os.Stat(pathDir); os.IsNotExist(err) {
 		// 创建多级目录，权限为 0755
 		if err := os.MkdirAll(pathDir, 0755); err != nil {
-			panic(fmt.Sprintf("Failed to create directory: %s, error: %s", pathDir, err.Error()))
+			panicDatabaseError("创建 SQLite 数据库目录", Config.Sqlite3.Path, err)
 		}
 	}
 
 	//判断数据库文件是否存在，如果存在，看是否有读写权限，没有则赋予其读写权限
 	if _, err := os.Stat(Config.Sqlite3.Path); !os.IsNotExist(err) {
 		if err := os.Chmod(Config.Sqlite3.Path, 0664); err != nil {
-			fmt.Println("Failed to set file permissions:", err.Error())
+			LogErr(fmt.Errorf("设置 SQLite 数据库文件权限失败（path=%q）: %w", Config.Sqlite3.Path, err))
 		}
 	}
 
@@ -84,13 +84,15 @@ func sqlite3Connect(loggerLevel logger.LogLevel) *gorm.DB {
 		},
 	})
 	if err != nil {
-		panic("failed to connect database")
+		panicDatabaseError("连接 SQLite 数据库", Config.Sqlite3.Path, err)
 	}
 
-	db.Exec("PRAGMA journal_mode=WAL;")
+	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
+		panicDatabaseError("启用 SQLite WAL 模式", Config.Sqlite3.Path, err)
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
-		panic(err)
+		panicDatabaseError("获取 SQLite 底层连接", Config.Sqlite3.Path, err)
 	}
 
 	// SetMaxIdleConns 设置空闲连接池中连接的最大数量
@@ -101,6 +103,16 @@ func sqlite3Connect(loggerLevel logger.LogLevel) *gorm.DB {
 	sqlDB.SetConnMaxLifetime(time.Minute * 10)
 
 	return db
+}
+
+func panicDatabaseError(operation, databasePath string, err error) {
+	absolutePath, absolutePathErr := filepath.Abs(databasePath)
+	if absolutePathErr != nil {
+		absolutePath = databasePath
+	}
+	wrappedErr := fmt.Errorf("%s失败（path=%q）: %w", operation, absolutePath, err)
+	LogErr(wrappedErr)
+	panic(wrappedErr)
 }
 
 func mysqlConnect(loggerLevel logger.LogLevel) *gorm.DB {

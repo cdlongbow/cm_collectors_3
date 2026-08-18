@@ -202,7 +202,7 @@ if "!BUILD_SERVER_DARWIN_AMD64!"=="1" (
     pushd "!ROOT_DIR!\cm_collectors_server"
     set GOOS=darwin
     set GOARCH=amd64
-    go build -o "!BUILD_DIR!\cm_collectors_server_darwin_amd64" . || (echo [错误] macOS Intel 构建失败 & popd & goto END)
+    go build -trimpath -o "!BUILD_DIR!\cm_collectors_server_darwin_amd64" . || (echo [错误] macOS Intel 构建失败 & popd & goto END)
     popd
     echo [服务端macOS Intel] 构建完成
     pushd "!BUILD_DIR!"
@@ -214,7 +214,7 @@ if "!BUILD_SERVER_DARWIN_ARM64!"=="1" (
     pushd "!ROOT_DIR!\cm_collectors_server"
     set GOOS=darwin
     set GOARCH=arm64
-    go build -o "!BUILD_DIR!\cm_collectors_server_darwin_arm64" . || (echo [错误] macOS Apple Silicon 构建失败 & popd & goto END)
+    go build -trimpath -o "!BUILD_DIR!\cm_collectors_server_darwin_arm64" . || (echo [错误] macOS Apple Silicon 构建失败 & popd & goto END)
     popd
     echo [服务端macOS Apple Silicon] 构建完成
     pushd "!BUILD_DIR!"

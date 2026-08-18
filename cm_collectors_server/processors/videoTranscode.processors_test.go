@@ -586,6 +586,21 @@ func TestCleanupVideoTransitionPreviewCache(t *testing.T) {
 	}
 }
 
+func TestApplicationCachePathUsesSoftwareCacheRoot(t *testing.T) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachePath, err := applicationCachePath("video-transcode", "transition-previews")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(filepath.Dir(executablePath), "runtime", "cache", "video-transcode", "transition-previews")
+	if filepath.Clean(cachePath) != filepath.Clean(expected) {
+		t.Fatalf("unexpected application cache path: got %q, want %q", cachePath, expected)
+	}
+}
+
 func TestVideoTranscodeConfigForEditAppliesSafeDefaults(t *testing.T) {
 	config := DefaultVideoTranscodeConfig()
 	adjustedConfig, adjusted := videoTranscodeConfigForEdit(config)

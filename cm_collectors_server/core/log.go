@@ -3,7 +3,9 @@ package core
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/gin-gonic/gin"
@@ -18,13 +20,23 @@ func logInit(logPath, logLevel string) {
 	default:
 		logrus.SetLevel(logrus.InfoLevel)
 	}
-	file, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	writers := []io.Writer{
-		file,
-		os.Stdout}
+	writers := []io.Writer{os.Stdout}
+	if logDir := filepath.Dir(logPath); logDir != "." {
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			log.Printf("无法创建日志目录 %q: %v", logDir, err)
+		}
+	}
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		absoluteLogPath, _ := filepath.Abs(logPath)
+		log.Printf("无法打开日志文件 %q: %v；错误将仅输出到控制台", absoluteLogPath, err)
+	} else {
+		writers = append([]io.Writer{file}, writers...)
+	}
 	//同时写文件和屏幕
 	fileAndStdoutWriter := io.MultiWriter(writers...)
 	logrus.SetOutput(fileAndStdoutWriter)
+	log.SetOutput(fileAndStdoutWriter)
 	//显示行号
 	logrus.SetReportCaller(true)
 }

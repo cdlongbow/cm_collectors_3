@@ -60,7 +60,7 @@ func appInit() {
 	//初始化项目数据库数据库
 	dbInitErr := models.DB_Init(core.DBS())
 	if dbInitErr != nil {
-		fmt.Println(dbInitErr)
+		core.LogErr(fmt.Errorf("数据库迁移失败: %w", dbInitErr))
 		return
 	}
 
