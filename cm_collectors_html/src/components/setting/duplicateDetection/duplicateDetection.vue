@@ -95,7 +95,11 @@
             <strong>重复组 #{{ (query.page - 1) * query.limit + groupIndex + 1 }}</strong>
             <span>共 {{ group.items.length }} 条，匹配 {{ group.matched_count }} 个采样点，平均距离 {{ group.avg_distance.toFixed(2) }}</span>
           </div>
-          <el-button type="danger" size="small" plain @click="deleteSelectedInGroup(group)">删除本组已选分集</el-button>
+          <div class="group-actions">
+            <el-button type="primary" size="small" plain icon="VideoPlay"
+              @click="openCompare(group, groupIndex)">同屏复核（{{ group.items.length }}）</el-button>
+            <el-button type="danger" size="small" plain @click="deleteSelectedInGroup(group)">删除本组已选分集</el-button>
+          </div>
         </div>
         <el-table :data="group.items" row-key="drama_series_id" border>
           <el-table-column width="52">
@@ -124,10 +128,12 @@
       :page-sizes="[10, 20, 50, 100]"
       @change="loadDuplicates"
     />
+    <duplicateCompareDialog ref="duplicateCompareDialogRef" @selection-change="handleCompareSelection" />
   </div>
 </template>
 
 <script setup lang="ts">
+import duplicateCompareDialog from './duplicateCompareDialog.vue';
 import selectFilesBases from '@/components/com/form/selectFilesBases.vue';
 import type {
   I_DuplicateGroup,
@@ -142,6 +148,8 @@ import { computed, onMounted, reactive, ref } from 'vue';
 const emit = defineEmits<{
   (e: 'switchTab', tabName: string): void;
 }>();
+
+const duplicateCompareDialogRef = ref<InstanceType<typeof duplicateCompareDialog>>();
 
 const loading = ref(false);
 const deleteLocalFile = ref(false);
@@ -284,6 +292,28 @@ const toggleRow = (row: I_DuplicateItem) => {
   selectedKeys.value = next;
 };
 
+const openCompare = (group: I_DuplicateGroup, groupIndex: number) => {
+  const groupNumber = (query.page - 1) * query.limit + groupIndex + 1;
+  const selectedIds = group.items
+    .filter((item) => selectedKeys.value.has(rowKey(item)))
+    .map((item) => item.drama_series_id);
+  duplicateCompareDialogRef.value?.open(group, groupNumber, selectedIds);
+};
+
+const handleCompareSelection = (payload: { items: I_DuplicateItem[]; selectedIds: string[] }) => {
+  const next = new Set(selectedKeys.value);
+  const selectedIds = new Set(payload.selectedIds);
+  payload.items.forEach((item) => {
+    const key = rowKey(item);
+    if (selectedIds.has(item.drama_series_id)) {
+      next.add(key);
+    } else {
+      next.delete(key);
+    }
+  });
+  selectedKeys.value = next;
+};
+
 const deleteSelectedInGroup = async (group: I_DuplicateGroup) => {
   const selectedRows = group.items.filter((item) => selectedKeys.value.has(rowKey(item)));
   if (selectedRows.length === 0) {
@@ -405,6 +435,12 @@ onMounted(refreshAll);
       color: var(--el-text-color-secondary);
       font-size: 13px;
     }
+  }
+
+  .group-actions {
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
   }
 
   .pagination {

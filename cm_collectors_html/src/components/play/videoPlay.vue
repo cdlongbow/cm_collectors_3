@@ -118,6 +118,7 @@ const playCloudCheckPromptDialogRef = ref<InstanceType<typeof playCloudCheckProm
 const player = ref<any>(null) // 指定更合适的类型
 let playerSetupVersion = 0;
 let playerSetupTimer: number | undefined;
+let sourceRetryTimer: number | undefined;
 let nativeSourceVersion = 0
 let nativeSourceCleanup: (() => void) | undefined
 const videoId = ref('');
@@ -674,12 +675,23 @@ const getRotation = (): number => {
 };
 
 //播放
-const play = () => {
-  if (isMobile()) {
-    nativeVideoRef.value?.play();
-    return;
+const play = async (): Promise<boolean> => {
+  try {
+    if (isMobile()) {
+      if (!nativeVideoRef.value) return false;
+      await nativeVideoRef.value.play();
+      return true;
+    }
+    if (!player.value) return false;
+    const playResult = player.value.play();
+    if (playResult && typeof playResult.then === 'function') {
+      await playResult;
+    }
+    return true;
+  } catch (error) {
+    console.warn('视频播放启动失败:', error);
+    return false;
   }
-  player.value?.play();
 }
 
 const handleCenterPlay = () => {
@@ -806,6 +818,8 @@ const setVideoSource = (
   retryCount = 0,
   errorCallback: (error?: unknown) => void = () => undefined,
 ) => {
+  window.clearTimeout(sourceRetryTimer)
+  sourceRetryTimer = undefined
   clearSubtitleCues()
   isPlaybackActive.value = false
   videoId.value = extractVideoIdFromPath(src)
@@ -908,7 +922,9 @@ const setVideoSource = (
           retryCount++
           console.log('重试加载视频：', retryCount)
           // 添加延迟重试，避免频繁请求
-          setTimeout(() => {
+          window.clearTimeout(sourceRetryTimer)
+          sourceRetryTimer = window.setTimeout(() => {
+            sourceRetryTimer = undefined
             setVideoSource(withMediaReloadToken(src, retryCount), type, fn, title, retryCount, errorCallback)
           }, 1000)
           return
@@ -946,18 +962,18 @@ const setVideoSource = (
 
 }
 // 设置音量（0~1）
-const setVolume = (volumeLevel: number) => {
+const setVolume = (volumeLevel: number, persist = true) => {
   const validVolume = Math.min(1, Math.max(0, volumeLevel))
   if (isMobile()) {
     if (nativeVideoRef.value) nativeVideoRef.value.volume = validVolume
-    saveVolumeToStorage(validVolume)
+    if (persist) saveVolumeToStorage(validVolume)
     return
   }
   if (player.value) {
     player.value.volume(validVolume)
     // 触发音量变化事件，更新UI
     player.value.trigger('volumechange')
-    saveVolumeToStorage(validVolume)
+    if (persist) saveVolumeToStorage(validVolume)
   }
 }
 const getVolume = () => {
@@ -1096,6 +1112,11 @@ const resetPlayer = () => {
 // 主动卸载媒体源并中止浏览器仍在进行的 Range/HLS 请求。
 // 仅 pause 不会释放 Windows 上由服务端持有的源文件句柄。
 const releaseSource = () => {
+  playerSetupVersion++
+  window.clearTimeout(playerSetupTimer)
+  playerSetupTimer = undefined
+  window.clearTimeout(sourceRetryTimer)
+  sourceRetryTimer = undefined
   isPlaybackActive.value = false
   videoSrc.value = ''
   videoId.value = ''
@@ -1219,6 +1240,8 @@ onBeforeUnmount(() => {
   nativeSourceCleanup?.()
   nativeSourceCleanup = undefined
   window.clearTimeout(playerSetupTimer);
+  window.clearTimeout(sourceRetryTimer);
+  sourceRetryTimer = undefined;
   if (player.value) {
     player.value.pause()
     player.value.dispose()
