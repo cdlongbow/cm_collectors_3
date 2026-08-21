@@ -1,9 +1,30 @@
 package processors
 
 import (
+	"cm_collectors_server/datatype"
 	"cm_collectors_server/models"
 	"testing"
 )
+
+func TestEffectiveSeriesSortMode(t *testing.T) {
+	tests := []struct {
+		name   string
+		config datatype.Config_ScanDisk
+		want   datatype.SeriesSortMode
+	}{
+		{name: "new mode", config: datatype.Config_ScanDisk{FolderToSeriesSortMode: datatype.SeriesSortModeSizeDesc}, want: datatype.SeriesSortModeSizeDesc},
+		{name: "legacy enabled", config: datatype.Config_ScanDisk{FolderToSeriesSort: true}, want: datatype.SeriesSortModeNameAsc},
+		{name: "legacy disabled", config: datatype.Config_ScanDisk{}, want: datatype.SeriesSortModeKeep},
+		{name: "invalid mode", config: datatype.Config_ScanDisk{FolderToSeriesSortMode: "invalid"}, want: datatype.SeriesSortModeKeep},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := effectiveSeriesSortMode(test.config); got != test.want {
+				t.Fatalf("effectiveSeriesSortMode() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestNormalizeSeriesName(t *testing.T) {
 	tests := map[string]string{

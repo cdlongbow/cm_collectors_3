@@ -280,6 +280,17 @@ func (VideoMetadata) TriggerForResource(resource *models.Resources) {
 	}
 }
 
+// TriggerForNewDramaSeries 用于向已有视频资源追加单个分集后的按需采集。
+// 只提交新分集，避免批量导入合并剧集时反复检查并提交整个剧集。
+func (VideoMetadata) TriggerForNewDramaSeries(dramaSeries *models.ResourcesDramaSeries) {
+	(VideoMetadata{}).MarkInteractiveActivity()
+	if dramaSeries == nil ||
+		!videoMetadataTriggerEnabled(func(s *models.VideoMetadataSetting) bool { return s.CollectOnNewOrChanged }) {
+		return
+	}
+	(VideoMetadata{}).enqueueIfNeeded(*dramaSeries, videoMetadataPriorityHigh, "", false, false, false)
+}
+
 // TriggerForDetail 用于详情页按需补齐。
 func (VideoMetadata) TriggerForDetail(resource *models.Resources) {
 	(VideoMetadata{}).MarkInteractiveActivity()

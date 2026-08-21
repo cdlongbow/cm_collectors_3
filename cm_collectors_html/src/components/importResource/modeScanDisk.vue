@@ -79,8 +79,17 @@
             <div><el-text type="warning">适合连续剧文件名只差集数、分段号或少量字符的情况；开启“同一文件夹合并”时会优先使用完整文件夹合并。</el-text></div>
           </div>
         </el-form-item>
-        <el-form-item>
-          <el-checkbox v-model="formData.folderToSeriesSort" label="合并剧集时，是否按名称重新排序" />
+        <el-form-item v-if="formData.folderToSeries || formData.similarNameToSeries" label="合并后的剧集排序">
+          <div class="form-column-list">
+            <el-select v-model="formData.folderToSeriesSortMode">
+              <el-option label="保持现有顺序（新增分集追加到末尾）" value="keep" />
+              <el-option label="文件名称正序" value="nameAsc" />
+              <el-option label="文件名称倒序" value="nameDesc" />
+              <el-option label="文件大小正序（小文件在前）" value="sizeAsc" />
+              <el-option label="文件大小倒序（大文件在前）" value="sizeDesc" />
+            </el-select>
+            <div><el-text type="warning">新增视频后会按所选方式重新排列该资源的全部分集。</el-text></div>
+          </div>
         </el-form-item>
         <el-form-item>
           <div class="form-column-list"><el-checkbox v-model="formData.enableNfoFuzzyMatch" label="开启nfo模糊匹配" />
@@ -202,7 +211,13 @@ const getConfig = async () => {
     const configStr = result.data;
     if (configStr != '') {
       const config = JSON.parse(configStr);
-      formData.value = { ...defualtConfigScanDisk, ...config };
+      const legacySortMode = config.folderToSeriesSort === true ? 'nameAsc' : 'keep';
+      formData.value = {
+        ...defualtConfigScanDisk,
+        ...config,
+        folderToSeriesSortMode: config.folderToSeriesSortMode ?? legacySortMode,
+      };
+      delete formData.value.folderToSeriesSort;
     } else {
       formData.value = { ...defualtConfigScanDisk };
     }

@@ -35,6 +35,25 @@ func newDramaSeriesSyncTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestCreateDramaSeriesReturnsInsertedItemForMetadataTrigger(t *testing.T) {
+	db := newDramaSeriesSyncTestDB(t)
+	dramaSeries, err := (ResourcesDramaSeries{}).Create(db, "resource-1", "episode-2.mp4", 1)
+	if err != nil {
+		t.Fatalf("create drama series: %v", err)
+	}
+	if dramaSeries == nil || dramaSeries.ID == "" || dramaSeries.Src != "episode-2.mp4" || dramaSeries.Sort != 1 {
+		t.Fatalf("unexpected created drama series: %#v", dramaSeries)
+	}
+
+	var stored models.ResourcesDramaSeries
+	if err := db.First(&stored, "id = ?", dramaSeries.ID).Error; err != nil {
+		t.Fatalf("load created drama series: %v", err)
+	}
+	if stored.ResourcesID != "resource-1" || stored.Src != dramaSeries.Src {
+		t.Fatalf("stored drama series mismatch: %#v", stored)
+	}
+}
+
 func TestSetResourcesDramaSeriesReorderPreservesRelatedData(t *testing.T) {
 	db := newDramaSeriesSyncTestDB(t)
 	old := []models.ResourcesDramaSeries{

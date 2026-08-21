@@ -234,11 +234,14 @@ export interface I_config_scanDisk {
   autoCreatePoster: boolean; // 自动创建封面海报
   folderToSeries: boolean; // 将同一文件夹下的多个视频文件合并为剧集
   similarNameToSeries: boolean; // 将同一文件夹下名称相近、纯集数或集数前缀相同的视频文件合并为剧集
-  folderToSeriesSort: boolean; // 合并剧集时，是否按名称重新排序
+  folderToSeriesSort?: boolean; // 兼容旧配置
+  folderToSeriesSortMode: T_seriesSortMode; // 合并后的剧集排序方式
   enableNfoFuzzyMatch: boolean; // 开启nfo模糊匹配
   useRandomNfoIfNoneMatch: boolean; // nfo无法匹配时使用目录下随机nfo文件
   nfo: I_config_scanDisk_nfo;
 }
+
+export type T_seriesSortMode = 'keep' | 'nameAsc' | 'nameDesc' | 'sizeAsc' | 'sizeDesc';
 
 export interface I_config_scanDisk_nfo {
   nfoStatus: boolean;
@@ -272,7 +275,7 @@ export const defualtConfigScanDisk: I_config_scanDisk = {
   autoCreatePoster: true,
   folderToSeries: false,
   similarNameToSeries: false,
-  folderToSeriesSort: false,
+  folderToSeriesSortMode: 'nameAsc',
   enableNfoFuzzyMatch: true,
   useRandomNfoIfNoneMatch: false,
   nfo: {

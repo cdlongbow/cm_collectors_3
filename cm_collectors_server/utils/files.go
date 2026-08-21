@@ -25,6 +25,10 @@ const (
 	FileTimeAsc
 	// FileTimeDesc 按文件创建时间倒序排序
 	FileTimeDesc
+	// FileSizeAsc 按文件大小正序排序
+	FileSizeAsc
+	// FileSizeDesc 按文件大小倒序排序
+	FileSizeDesc
 )
 
 var FileImageExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
@@ -163,6 +167,41 @@ func SortFilesByOrder(filePaths []string, sortOrder FilesSortOrder) []string {
 		// 提取排序后的路径
 		for i := range filesWithInfo {
 			filePaths[i] = filesWithInfo[i].path
+		}
+	case FileSizeAsc, FileSizeDesc:
+		type fileWithSize struct {
+			path  string
+			size  int64
+			valid bool
+		}
+		filesWithSize := make([]fileWithSize, 0, len(filePaths))
+		for _, filePath := range filePaths {
+			info, err := os.Stat(filePath)
+			var size int64
+			if err == nil {
+				size = info.Size()
+			}
+			filesWithSize = append(filesWithSize, fileWithSize{
+				path:  filePath,
+				size:  size,
+				valid: err == nil,
+			})
+		}
+		sort.SliceStable(filesWithSize, func(i, j int) bool {
+			left, right := filesWithSize[i], filesWithSize[j]
+			if left.valid != right.valid {
+				return left.valid
+			}
+			if left.valid && left.size != right.size {
+				if sortOrder == FileSizeAsc {
+					return left.size < right.size
+				}
+				return left.size > right.size
+			}
+			return naturalPathLess(left.path, right.path)
+		})
+		for i := range filesWithSize {
+			filePaths[i] = filesWithSize[i].path
 		}
 	}
 

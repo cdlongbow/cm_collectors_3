@@ -178,12 +178,23 @@ type Config_ScanDisk struct {
 	CoverPosterHeight                  int                 `json:"coverPosterHeight"`
 	AutoCreatePoster                   bool                `json:"autoCreatePoster"`
 	FolderToSeries                     bool                `json:"folderToSeries"`
-	SimilarNameToSeries                bool                `json:"similarNameToSeries"` // 仅在同一文件夹下，将名称相近或集数前缀相同的视频追加为同一资源的剧集
-	FolderToSeriesSort                 bool                `json:"folderToSeriesSort"`
+	SimilarNameToSeries                bool                `json:"similarNameToSeries"`          // 仅在同一文件夹下，将名称相近或集数前缀相同的视频追加为同一资源的剧集
+	FolderToSeriesSort                 bool                `json:"folderToSeriesSort,omitempty"` // 兼容旧配置；新配置使用 FolderToSeriesSortMode
+	FolderToSeriesSortMode             SeriesSortMode      `json:"folderToSeriesSortMode"`       // 合并后的剧集排序方式
 	EnableNfoFuzzyMatch                bool                `json:"enableNfoFuzzyMatch"`
 	UseRandomNfoIfNoneMatch            bool                `json:"useRandomNfoIfNoneMatch"`
 	Nfo                                Config_ScanDisk_Nfo `json:"nfo"`
 }
+
+type SeriesSortMode string
+
+const (
+	SeriesSortModeKeep     SeriesSortMode = "keep"
+	SeriesSortModeNameAsc  SeriesSortMode = "nameAsc"
+	SeriesSortModeNameDesc SeriesSortMode = "nameDesc"
+	SeriesSortModeSizeAsc  SeriesSortMode = "sizeAsc"
+	SeriesSortModeSizeDesc SeriesSortMode = "sizeDesc"
+)
 
 type Config_ScanDisk_Nfo struct {
 	NfoStatus               bool     `json:"nfoStatus"`

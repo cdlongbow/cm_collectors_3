@@ -123,14 +123,16 @@ func (t ImportData) ScanDiskImportData(filesBasesId, filePath string, config dat
 			if !existsDramaSeriesFilePath {
 				resourcesID := (*resourcesDramaSeries)[0].ResourcesID
 				// 直接写入剧集信息
-				err := ResourcesDramaSeries{}.Create(core.DBS(), resourcesID, filePath, len(*resourcesDramaSeries))
+				newDramaSeries, err := ResourcesDramaSeries{}.Create(core.DBS(), resourcesID, filePath, len(*resourcesDramaSeries))
 				if err != nil {
 					return err
 				}
+				// 追加分集不会经过 CreateResource/UpdateResource，需要单独触发新分集的视频信息采集。
+				VideoMetadata{}.TriggerForNewDramaSeries(newDramaSeries)
 				AutoBackup{}.RecordResourceChanges(1)
-				// 是否按名称重新排序剧集
-				if config.FolderToSeriesSort {
-					err := ResourcesDramaSeries{}.SortBySrc(resourcesID)
+				// 按配置重排整个剧集；只改变分集顺序，不影响资源元数据来源。
+				if sortMode := effectiveSeriesSortMode(config); sortMode != datatype.SeriesSortModeKeep {
+					err := ResourcesDramaSeries{}.SortByMode(resourcesID, sortMode)
 					if err != nil {
 						return err
 					}
@@ -195,6 +197,22 @@ func (t ImportData) ScanDiskImportData(filesBasesId, filePath string, config dat
 		_, err = Resources{}.CreateResource(&resourceDataParam)
 		return err
 	}
+}
+
+// effectiveSeriesSortMode 优先使用新枚举配置，并兼容旧版的“按名称重新排序”布尔配置。
+func effectiveSeriesSortMode(config datatype.Config_ScanDisk) datatype.SeriesSortMode {
+	switch config.FolderToSeriesSortMode {
+	case datatype.SeriesSortModeKeep,
+		datatype.SeriesSortModeNameAsc,
+		datatype.SeriesSortModeNameDesc,
+		datatype.SeriesSortModeSizeAsc,
+		datatype.SeriesSortModeSizeDesc:
+		return config.FolderToSeriesSortMode
+	}
+	if config.FolderToSeriesSort {
+		return datatype.SeriesSortModeNameAsc
+	}
+	return datatype.SeriesSortModeKeep
 }
 
 // GetResourceTitle 根据配置的命名模式生成资源标题

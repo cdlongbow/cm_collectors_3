@@ -254,28 +254,53 @@ func (t ResourcesDramaSeries) SetResourcesDramaSeries(db *gorm.DB, resourceID st
 	})
 }
 
-func (ResourcesDramaSeries) SortBySrc(resourceID string) error {
+func (ResourcesDramaSeries) SortByMode(resourceID string, sortMode datatype.SeriesSortMode) error {
 	db := core.DBS()
 	list, err := models.ResourcesDramaSeries{}.ListByResourceID(db, resourceID)
 	if err != nil {
 		return err
 	}
-	// 根据src字段进行正序排序
-	sortedList := *list
-	for i := 0; i < len(sortedList)-1; i++ {
-		for j := i + 1; j < len(sortedList); j++ {
-			if sortedList[i].Src > sortedList[j].Src {
-				sortedList[i], sortedList[j] = sortedList[j], sortedList[i]
-			}
-		}
+	sortedList := append([]models.ResourcesDramaSeries(nil), (*list)...)
+	filePaths := make([]string, 0, len(sortedList))
+	for _, item := range sortedList {
+		filePaths = append(filePaths, item.Src)
 	}
-	for i := range sortedList {
-		sortedList[i].Sort = i
+
+	var order utils.FilesSortOrder
+	switch sortMode {
+	case datatype.SeriesSortModeNameAsc:
+		order = utils.FileNameAsc
+	case datatype.SeriesSortModeNameDesc:
+		order = utils.FileNameDesc
+	case datatype.SeriesSortModeSizeAsc:
+		order = utils.FileSizeAsc
+	case datatype.SeriesSortModeSizeDesc:
+		order = utils.FileSizeDesc
+	default:
+		return nil
+	}
+	filePaths = utils.SortFilesByOrder(filePaths, order)
+
+	itemsBySrc := make(map[string][]models.ResourcesDramaSeries, len(sortedList))
+	for _, item := range sortedList {
+		itemsBySrc[item.Src] = append(itemsBySrc[item.Src], item)
+	}
+	orderedList := make([]models.ResourcesDramaSeries, 0, len(sortedList))
+	for _, filePath := range filePaths {
+		items := itemsBySrc[filePath]
+		if len(items) == 0 {
+			continue
+		}
+		orderedList = append(orderedList, items[0])
+		itemsBySrc[filePath] = items[1:]
+	}
+	for i := range orderedList {
+		orderedList[i].Sort = i
 	}
 	return models.BatchUpdate(
 		db,
 		models.ResourcesDramaSeries{}.TableName(),
-		"id", []string{"sort"}, sortedList, func(item models.ResourcesDramaSeries) map[string]interface{} {
+		"id", []string{"sort"}, orderedList, func(item models.ResourcesDramaSeries) map[string]interface{} {
 			return map[string]interface{}{
 				"id":   item.ID,
 				"sort": item.Sort,
@@ -284,13 +309,13 @@ func (ResourcesDramaSeries) SortBySrc(resourceID string) error {
 	)
 }
 
-func (ResourcesDramaSeries) Create(tx *gorm.DB, resourceID, src string, sort int) error {
-	return models.ResourcesDramaSeries{}.Creates(tx, &[]models.ResourcesDramaSeries{
-		{
-			ID: core.GenerateUniqueID(), ResourcesID: resourceID, Src: src, Sort: sort,
-			VideoMetadataExcluded: utils.IsClearlyNonVideoSource(src),
-		},
-	})
+func (ResourcesDramaSeries) Create(tx *gorm.DB, resourceID, src string, sort int) (*models.ResourcesDramaSeries, error) {
+	dramaSeries := models.ResourcesDramaSeries{
+		ID: core.GenerateUniqueID(), ResourcesID: resourceID, Src: src, Sort: sort,
+		VideoMetadataExcluded: utils.IsClearlyNonVideoSource(src),
+	}
+	err := models.ResourcesDramaSeries{}.Creates(tx, &[]models.ResourcesDramaSeries{dramaSeries})
+	return &dramaSeries, err
 }
 
 func (ResourcesDramaSeries) DeleteByResourcesID(tx *gorm.DB, resourceID string) error {
