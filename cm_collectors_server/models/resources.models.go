@@ -225,7 +225,7 @@ func (t Resources) DataList(db *gorm.DB, par *datatype.ReqParam_ResourcesList) (
 	} else {
 		query = t.Preload(db).Model(Resources{}).Where("filesBases_id = ?", par.FilesBasesId)
 		query = t.setDbSearchData(query, &par.SearchData)
-		query = t.setDbSearchDataOrder(query, par.SearchData.Sort).Limit(par.Limit).Offset(offset)
+		query = t.setDbSearchDataOrder(query, par.SearchData.Sort, par.FilesBasesId).Limit(par.Limit).Offset(offset)
 		err = query.Find(&dataList).Error
 	}
 	if err != nil {
@@ -570,7 +570,7 @@ func (Resources) getOrderClause(column string, descending bool) string {
 	return column + collation + order
 }
 
-func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searchSort) *gorm.DB {
+func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searchSort, filesBasesID string) *gorm.DB {
 	switch searchSort {
 	case datatype.E_searchSort_addTimeAsc:
 		db = db.Order("pin_to_top DESC, addTime ASC")
@@ -596,6 +596,10 @@ func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searc
 		db = db.Order("pin_to_top DESC, " + t.getOrderClause("keyWords", false) + ", addTime DESC")
 	case datatype.E_searchSort_titleDesc:
 		db = db.Order("pin_to_top DESC, " + t.getOrderClause("keyWords", true) + ", addTime DESC")
+	case datatype.E_searchSort_resourceSizeAsc:
+		db = t.setDbResourceSizeOrder(db, filesBasesID, false)
+	case datatype.E_searchSort_resourceSizeDesc:
+		db = t.setDbResourceSizeOrder(db, filesBasesID, true)
 	case datatype.E_searchSort_history:
 		db = db.Order("pin_to_top DESC, lastPlayTime DESC, addTime DESC")
 	case datatype.E_searchSort_hot:
@@ -606,6 +610,41 @@ func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searc
 		db = db.Order("pin_to_top DESC, addTime DESC")
 	}
 	return db
+}
+
+// setDbResourceSizeOrder 按资源下全部有效视频分集的文件大小总和排序。
+// 只要存在未取得可靠大小的未排除分集，整个资源就视为大小未知；未知项始终排在末尾。
+func (Resources) setDbResourceSizeOrder(db *gorm.DB, filesBasesID string, descending bool) *gorm.DB {
+	validSizeCondition := `size_vm.file_size > 0 AND ((size_vm.probe_status = ? AND size_vm.metadata_version >= ?) OR size_vm.probe_status IN (?, ?))`
+	sizeSummary := db.Session(&gorm.Session{NewDB: true}).
+		Table("resourcesDramaSeries AS size_ds").
+		Select(`size_ds.resources_id,
+			COUNT(size_ds.id) AS total_files,
+			SUM(CASE WHEN `+validSizeCondition+` THEN 1 ELSE 0 END) AS counted_files,
+			COALESCE(SUM(CASE WHEN `+validSizeCondition+` THEN size_vm.file_size ELSE 0 END), 0) AS total_size`,
+			VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusFailed, VideoMetadataStatusManual,
+			VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusFailed, VideoMetadataStatusManual).
+		Joins("LEFT JOIN resources_video_metadata AS size_vm ON size_vm.drama_series_id = size_ds.id").
+		Joins("JOIN resources AS size_resource ON size_resource.id = size_ds.resources_id").
+		Where("size_resource.filesBases_id = ?", filesBasesID).
+		Where("size_resource.mode IN ?", []datatype.E_resourceMode{datatype.E_resourceMode_Movies, datatype.E_resourceMode_VideoLink}).
+		Where("COALESCE(size_ds.video_metadata_excluded, 0) = 0").
+		Group("size_ds.resources_id")
+
+	direction := " ASC"
+	if descending {
+		direction = " DESC"
+	}
+	knownSizeCondition := `resources.mode IN ('movies', 'videoLink')
+		AND resource_file_sizes.total_files > 0
+		AND resource_file_sizes.counted_files = resource_file_sizes.total_files`
+	return db.
+		Joins("LEFT JOIN (?) AS resource_file_sizes ON resource_file_sizes.resources_id = resources.id", sizeSummary).
+		Order("pin_to_top DESC").
+		Order("CASE WHEN " + knownSizeCondition + " THEN 0 ELSE 1 END ASC").
+		Order("CASE WHEN " + knownSizeCondition + " THEN resource_file_sizes.total_size ELSE NULL END" + direction).
+		Order("resources.addTime DESC").
+		Order("resources.id ASC")
 }
 
 func (Resources) db_random(db *gorm.DB) *gorm.DB {

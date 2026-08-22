@@ -8,6 +8,8 @@ import (
 )
 
 const (
+	CurrentVideoMetadataVersion = 1
+
 	VideoMetadataStatusProcessing = "processing"
 	VideoMetadataStatusSuccess    = "success"
 	VideoMetadataStatusFailed     = "failed"

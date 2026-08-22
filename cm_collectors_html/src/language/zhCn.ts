@@ -50,6 +50,8 @@ export default {
     scoreAsc: '评分正序',
     starDesc: '评星倒序',
     starAsc: '评星正序',
+    resourceSizeDesc: '体积倒序',
+    resourceSizeAsc: '体积正序',
     history: '历史记录',
     hot: '当前热度',
     random: '随机展示',

@@ -36,6 +36,8 @@ export enum E_searchSort {
   StarAsc = 'starAsc', //评星正序
   TitleDesc = 'titleDesc', //标题倒叙
   TitleAsc = 'titleAsc',  //标题正序
+  ResourceSizeDesc = 'resourceSizeDesc', //资源体积倒序
+  ResourceSizeAsc = 'resourceSizeAsc', //资源体积正序
   History = 'history', //历史记录
   Hot = 'hot', //当前热度
   YouLike = 'youLike', //猜你喜欢

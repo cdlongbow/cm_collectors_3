@@ -19,7 +19,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentVideoMetadataVersion = 1
+const CurrentVideoMetadataVersion = models.CurrentVideoMetadataVersion
 
 const (
 	videoMetadataPriorityLow = iota + 1
