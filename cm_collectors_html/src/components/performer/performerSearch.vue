@@ -48,8 +48,8 @@ import selectStar from '../com/form/selectStar.vue';
 import selectCup from '../com/form/selectCup.vue';
 import performerTagFilter from './performerTagFilter.vue';
 import { appStoreData } from '@/storeData/app.storeData';
-import { reactive } from 'vue';
-import type { I_search_performer } from '@/dataType/performer.dataType';
+import { reactive, type PropType } from 'vue';
+import type { I_search_performer, T_performerSort } from '@/dataType/performer.dataType';
 import type { I_performerTag, PerformerTagMatchMode } from '@/dataType/performerTag.dataType';
 
 const store = { appStoreData: appStoreData() };
@@ -60,8 +60,9 @@ const props = defineProps({
   selectionCount: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   selectingAll: { type: Boolean, default: false },
+  initialSort: { type: String as PropType<T_performerSort>, default: 'createdAtDesc' },
 });
-const searchData = reactive<I_search_performer>({ search: '', star: '', cup: '', charIndex: '', tagIds: [], tagMatchMode: 'any', sort: 'createdAtDesc' });
+const searchData = reactive<I_search_performer>({ search: '', star: '', cup: '', charIndex: '', tagIds: [], tagMatchMode: 'any', sort: props.initialSort });
 const activeTags = reactive<I_performerTag[]>([]);
 const emits = defineEmits([
   'add', 'recycleBin', 'search', 'scraper', 'avatarBatch', 'batchEnter', 'batchExit',

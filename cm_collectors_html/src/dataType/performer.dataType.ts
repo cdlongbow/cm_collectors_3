@@ -35,8 +35,18 @@ export interface I_search_performer {
   charIndex: string;
   tagIds: string[];
   tagMatchMode: 'any' | 'all';
-  sort: 'createdAtDesc' | 'nameAsc' | 'nameDesc' | 'resourceCountDesc' | 'resourceCountAsc';
+  sort: T_performerSort;
 }
+
+export type T_performerSort = 'createdAtDesc' | 'nameAsc' | 'nameDesc' | 'resourceCountDesc' | 'resourceCountAsc';
+
+export const performerSortValues: readonly T_performerSort[] = [
+  'createdAtDesc',
+  'nameAsc',
+  'nameDesc',
+  'resourceCountDesc',
+  'resourceCountAsc',
+];
 
 
 export interface I_performerBases {

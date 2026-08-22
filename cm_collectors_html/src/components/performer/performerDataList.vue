@@ -28,6 +28,7 @@
       <div class="performer-container-main">
         <performerSearch class="performer-search-toolbar" :admin="true" :performer-bases-id="props.performerBasesId"
           :batch-mode="batchMode" :selection-count="selectedPerformerIds.size" :total="dataCount" :selecting-all="selectingAll"
+          :initial-sort="initialPerformerSort"
           @add="addPerformerHandle" @recycleBin="recycleBinHandle" @search="changeSearchHandle" @scraper="scraperHandle"
           @avatarBatch="avatarBatchHandle" @batchEnter="enterBatchMode" @batchExit="exitBatchMode"
           @selectPage="selectCurrentPage" @selectAll="selectAllFiltered" @invertPage="invertCurrentPage"
@@ -89,7 +90,7 @@ import scraperPerformerDialog from '../importResource/scraperPerformerDialog.vue
 import performerSearch from '@/components/performer/performerSearch.vue';
 import performerInfo from '@/components/performer/performerInfo.vue';
 import performerBlock from '@/components/performer/performerBlock.vue';
-import type { I_performer, I_search_performer } from '@/dataType/performer.dataType';
+import { performerSortValues, type I_performer, type I_search_performer, type T_performerSort } from '@/dataType/performer.dataType';
 import { performerServer } from '@/server/performer.server';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { messageBoxConfirm } from '../../common/messageBox';
@@ -144,6 +145,12 @@ const getStoragePerformerBlockSize = () => {
   return Math.min(performerBlockSizeMax, Math.max(performerBlockSizeMin, storageValue));
 }
 const performerBlockSize = ref(getStoragePerformerBlockSize());
+const performerSortStorageKey = 'performer-list-sort';
+const getStoragePerformerSort = (): T_performerSort => {
+  const storageValue = localStorage.getItem(performerSortStorageKey) as T_performerSort | null;
+  return storageValue && performerSortValues.includes(storageValue) ? storageValue : 'createdAtDesc';
+}
+const initialPerformerSort = getStoragePerformerSort();
 const indexChars = ref(['ALL', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'])
 const selectIndex = ref('ALL');
 let searchCondition: I_search_performer = {
@@ -153,7 +160,7 @@ let searchCondition: I_search_performer = {
   charIndex: '',
   tagIds: [],
   tagMatchMode: 'any',
-  sort: 'createdAtDesc',
+  sort: initialPerformerSort,
 }
 
 const currentShowPerformer = ref<I_performer | undefined>(undefined);
@@ -341,7 +348,8 @@ const recycleBinHandle = () => {
 }
 
 const changeSearchHandle = (search: I_search_performer) => {
-  searchCondition = search;
+  localStorage.setItem(performerSortStorageKey, search.sort);
+  searchCondition = { ...search, tagIds: [...search.tagIds] };
   currentPage.value = 1;
   fetchCount = true;
   clearSelection();
