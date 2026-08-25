@@ -38,6 +38,10 @@ export enum E_searchSort {
   TitleAsc = 'titleAsc',  //标题正序
   ResourceSizeDesc = 'resourceSizeDesc', //资源体积倒序
   ResourceSizeAsc = 'resourceSizeAsc', //资源体积正序
+  DurationDesc = 'durationDesc', //资源总时长倒序
+  DurationAsc = 'durationAsc', //资源总时长正序
+  BitRateDesc = 'bitRateDesc', //资源平均码率倒序
+  BitRateAsc = 'bitRateAsc', //资源平均码率正序
   History = 'history', //历史记录
   Hot = 'hot', //当前热度
   YouLike = 'youLike', //猜你喜欢

@@ -597,9 +597,17 @@ func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searc
 	case datatype.E_searchSort_titleDesc:
 		db = db.Order("pin_to_top DESC, " + t.getOrderClause("keyWords", true) + ", addTime DESC")
 	case datatype.E_searchSort_resourceSizeAsc:
-		db = t.setDbResourceSizeOrder(db, filesBasesID, false)
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricSize, false)
 	case datatype.E_searchSort_resourceSizeDesc:
-		db = t.setDbResourceSizeOrder(db, filesBasesID, true)
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricSize, true)
+	case datatype.E_searchSort_durationAsc:
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricDuration, false)
+	case datatype.E_searchSort_durationDesc:
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricDuration, true)
+	case datatype.E_searchSort_bitRateAsc:
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricBitRate, false)
+	case datatype.E_searchSort_bitRateDesc:
+		db = t.setDbResourceVideoMetricOrder(db, filesBasesID, resourceVideoMetricBitRate, true)
 	case datatype.E_searchSort_history:
 		db = db.Order("pin_to_top DESC, lastPlayTime DESC, addTime DESC")
 	case datatype.E_searchSort_hot:
@@ -612,37 +620,60 @@ func (t Resources) setDbSearchDataOrder(db *gorm.DB, searchSort datatype.E_searc
 	return db
 }
 
-// setDbResourceSizeOrder 按资源下全部有效视频分集的文件大小总和排序。
-// 只要存在未取得可靠大小的未排除分集，整个资源就视为大小未知；未知项始终排在末尾。
-func (Resources) setDbResourceSizeOrder(db *gorm.DB, filesBasesID string, descending bool) *gorm.DB {
-	validSizeCondition := `size_vm.file_size > 0 AND ((size_vm.probe_status = ? AND size_vm.metadata_version >= ?) OR size_vm.probe_status IN (?, ?))`
-	sizeSummary := db.Session(&gorm.Session{NewDB: true}).
-		Table("resourcesDramaSeries AS size_ds").
-		Select(`size_ds.resources_id,
-			COUNT(size_ds.id) AS total_files,
-			SUM(CASE WHEN `+validSizeCondition+` THEN 1 ELSE 0 END) AS counted_files,
-			COALESCE(SUM(CASE WHEN `+validSizeCondition+` THEN size_vm.file_size ELSE 0 END), 0) AS total_size`,
-			VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusFailed, VideoMetadataStatusManual,
-			VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusFailed, VideoMetadataStatusManual).
-		Joins("LEFT JOIN resources_video_metadata AS size_vm ON size_vm.drama_series_id = size_ds.id").
-		Joins("JOIN resources AS size_resource ON size_resource.id = size_ds.resources_id").
-		Where("size_resource.filesBases_id = ?", filesBasesID).
-		Where("size_resource.mode IN ?", []datatype.E_resourceMode{datatype.E_resourceMode_Movies, datatype.E_resourceMode_VideoLink}).
-		Where("COALESCE(size_ds.video_metadata_excluded, 0) = 0").
-		Group("size_ds.resources_id")
+type resourceVideoMetric string
+
+const (
+	resourceVideoMetricSize     resourceVideoMetric = "size"
+	resourceVideoMetricDuration resourceVideoMetric = "duration"
+	resourceVideoMetricBitRate  resourceVideoMetric = "bitRate"
+)
+
+// setDbResourceVideoMetricOrder 聚合资源下全部未排除视频分集后排序。
+// 体积和时长使用总和，码率使用各分集已有视频码率的算术平均值；任一分集缺少当前有效值时，资源统一置后。
+func (Resources) setDbResourceVideoMetricOrder(db *gorm.DB, filesBasesID string, metric resourceVideoMetric, descending bool) *gorm.DB {
+	var validCondition string
+	var metricExpression string
+	var conditionVars []interface{}
+	switch metric {
+	case resourceVideoMetricDuration:
+		validCondition = `metric_ds.durationSeconds > 0 AND ((metric_vm.probe_status = ? AND metric_vm.metadata_version >= ?) OR metric_vm.probe_status = ?)`
+		metricExpression = `COALESCE(SUM(CASE WHEN ` + validCondition + ` THEN metric_ds.durationSeconds ELSE 0 END), 0)`
+		conditionVars = []interface{}{VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusManual}
+	case resourceVideoMetricBitRate:
+		validCondition = `metric_vm.video_bit_rate > 0 AND metric_vm.probe_status = ? AND metric_vm.metadata_version >= ?`
+		metricExpression = `COALESCE(AVG(CASE WHEN ` + validCondition + ` THEN metric_vm.video_bit_rate ELSE NULL END), 0)`
+		conditionVars = []interface{}{VideoMetadataStatusSuccess, CurrentVideoMetadataVersion}
+	default:
+		validCondition = `metric_vm.file_size > 0 AND ((metric_vm.probe_status = ? AND metric_vm.metadata_version >= ?) OR metric_vm.probe_status IN (?, ?))`
+		metricExpression = `COALESCE(SUM(CASE WHEN ` + validCondition + ` THEN metric_vm.file_size ELSE 0 END), 0)`
+		conditionVars = []interface{}{VideoMetadataStatusSuccess, CurrentVideoMetadataVersion, VideoMetadataStatusFailed, VideoMetadataStatusManual}
+	}
+	selectVars := append(append([]interface{}{}, conditionVars...), conditionVars...)
+	metricSummary := db.Session(&gorm.Session{NewDB: true}).
+		Table("resourcesDramaSeries AS metric_ds").
+		Select(`metric_ds.resources_id,
+			COUNT(metric_ds.id) AS total_files,
+			SUM(CASE WHEN `+validCondition+` THEN 1 ELSE 0 END) AS counted_files,
+			`+metricExpression+` AS metric_value`, selectVars...).
+		Joins("LEFT JOIN resources_video_metadata AS metric_vm ON metric_vm.drama_series_id = metric_ds.id").
+		Joins("JOIN resources AS metric_resource ON metric_resource.id = metric_ds.resources_id").
+		Where("metric_resource.filesBases_id = ?", filesBasesID).
+		Where("metric_resource.mode IN ?", []datatype.E_resourceMode{datatype.E_resourceMode_Movies, datatype.E_resourceMode_VideoLink}).
+		Where("COALESCE(metric_ds.video_metadata_excluded, 0) = 0").
+		Group("metric_ds.resources_id")
 
 	direction := " ASC"
 	if descending {
 		direction = " DESC"
 	}
-	knownSizeCondition := `resources.mode IN ('movies', 'videoLink')
-		AND resource_file_sizes.total_files > 0
-		AND resource_file_sizes.counted_files = resource_file_sizes.total_files`
+	knownMetricCondition := `resources.mode IN ('movies', 'videoLink')
+		AND resource_video_metric.total_files > 0
+		AND resource_video_metric.counted_files = resource_video_metric.total_files`
 	return db.
-		Joins("LEFT JOIN (?) AS resource_file_sizes ON resource_file_sizes.resources_id = resources.id", sizeSummary).
+		Joins("LEFT JOIN (?) AS resource_video_metric ON resource_video_metric.resources_id = resources.id", metricSummary).
 		Order("pin_to_top DESC").
-		Order("CASE WHEN " + knownSizeCondition + " THEN 0 ELSE 1 END ASC").
-		Order("CASE WHEN " + knownSizeCondition + " THEN resource_file_sizes.total_size ELSE NULL END" + direction).
+		Order("CASE WHEN " + knownMetricCondition + " THEN 0 ELSE 1 END ASC").
+		Order("CASE WHEN " + knownMetricCondition + " THEN resource_video_metric.metric_value ELSE NULL END" + direction).
 		Order("resources.addTime DESC").
 		Order("resources.id ASC")
 }
