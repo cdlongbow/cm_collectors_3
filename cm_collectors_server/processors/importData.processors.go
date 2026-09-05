@@ -165,7 +165,7 @@ func (t ImportData) ScanDiskImportData(filesBasesId, filePath string, config dat
 		},
 	}
 
-	if config.AutoCreatePoster {
+	if config.AutoGetVideoDefinition {
 		resourceDataParam.Resource.Definition = t.VideoDefinition(filePath, config)
 	}
 

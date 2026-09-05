@@ -537,7 +537,7 @@ func (t Scraper) ScraperOneResourceDataProcess(par *datatype.ReqParam_ScraperOne
 			{Src: filePath},
 		},
 	}
-	if configScanDisk.AutoCreatePoster {
+	if configScanDisk.AutoGetVideoDefinition {
 		resourceDataParam.Resource.Definition = ImportData{}.VideoDefinition(filePath, configScanDisk)
 	}
 
