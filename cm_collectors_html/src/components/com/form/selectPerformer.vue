@@ -2,6 +2,9 @@
   <el-select-v2 v-model="selectVal" clearable :style="{ width: props.width }" @change="changeHandle"
     @clear="handleClear" :multiple="props.multiple" filterable :options="options" :loading="loading"
     :filter-method="filterMethod" :props="selectProps">
+    <template v-if="editable" #label="{ label, value }">
+      <span title="右键编辑演员" @contextmenu.prevent.stop="openPerformerMenu($event, value, label)">{{ label }}</span>
+    </template>
     <template #default="{ item }">
       <div class="performer-item">
         <div class="name">{{ item.name }}</div>
@@ -9,6 +12,7 @@
       </div>
     </template>
   </el-select-v2>
+  <performerMenu v-if="editable" ref="performerMenuRef" :title="menuPerformer.name" :items="performerMenuItems" />
 </template>
 <script setup lang="ts">
 import { debounce } from '@/assets/debounce';
@@ -16,7 +20,8 @@ import type { E_performerCareerType } from '@/dataType/app.dataType';
 import type { I_performerBasic } from '@/dataType/performer.dataType';
 import { performerServer } from '@/server/performer.server';
 import { ElMessage } from 'element-plus';
-import { ref, onMounted, type PropType, onActivated, computed } from 'vue';
+import { ref, onMounted, type PropType, onActivated, computed, watch } from 'vue';
+import performerMenu from '../tool/rightMenu/performerMenu.vue';
 
 const selectVal = defineModel<string | string[]>({ type: [String, Array], default: "" as string | string[] });
 const props = defineProps({
@@ -35,11 +40,40 @@ const props = defineProps({
   careerType: {
     type: String as PropType<E_performerCareerType>,
     default: 'all'
-  }
+  },
+  editable: { type: Boolean, default: false },
+  editLoading: { type: Boolean, default: false },
+  selectedData: { type: Array as PropType<I_performerBasic[]>, default: () => [] },
 })
-const emit = defineEmits(['change'])
-let list: I_performerBasic[] = [];
-const options = ref<I_performerBasic[]>([]);
+const emit = defineEmits(['change', 'edit'])
+const list = ref<I_performerBasic[]>([]);
+const queryText = ref('');
+const savedNames = ref<Record<string, I_performerBasic>>({});
+watch(() => props.selectedData, items => {
+  items.forEach(item => { savedNames.value[item.id] = item; });
+}, { immediate: true });
+const resolvedList = computed(() => {
+  const items = new Map(list.value.map(item => [item.id, savedNames.value[item.id] || item]));
+  // 编辑职业后仍保留已关联演员，并优先展示最新保存的数据。
+  props.selectedData.forEach(item => items.set(item.id, item));
+  return [...items.values()];
+});
+const options = computed(() => resolvedList.value.filter(item => {
+  const query = queryText.value;
+  return !query || item.name.toLowerCase().includes(query) || item.aliasName.toLowerCase().includes(query) || item.keyWords.toLowerCase().includes(query);
+}));
+const performerMenuRef = ref<InstanceType<typeof performerMenu>>();
+const menuPerformer = ref({ id: '', name: '' });
+const performerMenuItems = computed(() => [{
+  label: '演员编辑',
+  icon: 'Edit',
+  disabled: props.editLoading,
+  handler: () => emit('edit', menuPerformer.value.id),
+}]);
+const openPerformerMenu = (event: MouseEvent, value: string, label: string) => {
+  menuPerformer.value = { id: value, name: label };
+  performerMenuRef.value?.show(event);
+};
 const loading = ref(false);
 
 // 使用固定的对象引用，避免每次渲染时创建新对象导致滚动位置重置
@@ -50,8 +84,8 @@ const selectProps = computed(() => ({
 
 
 const init = async () => {
-  list = [];
-  options.value = [];
+  list.value = [];
+  queryText.value = '';
   await getPerformerList();
 }
 const getPerformerList = async () => {
@@ -62,8 +96,7 @@ const getPerformerList = async () => {
     ElMessage.error(result.msg)
     return
   }
-  list = result.data
-  options.value = result.data
+  list.value = result.data
   loading.value = false;
 }
 
@@ -79,16 +112,7 @@ const handleClear = () => {
 }
 
 const filterMethod = debounce((query: string) => {
-  loading.value = true
-  if (query !== '') {
-    query = query.toLowerCase()
-    options.value = list.filter((item) => {
-      return item.name.toLowerCase().includes(query) || item.aliasName.toLowerCase().includes(query) || item.keyWords.toLowerCase().includes(query)
-    })
-  } else {
-    options.value = list
-  }
-  loading.value = false
+  queryText.value = query.toLowerCase();
 }, 200)
 
 const resetOptionsData = async () => {

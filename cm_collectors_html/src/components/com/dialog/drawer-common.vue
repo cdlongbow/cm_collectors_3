@@ -1,6 +1,6 @@
 <template>
   <el-drawer v-model="drawerVisible" :direction="direction" :size="props.width" :close-on-click-modal="false"
-    :append-to-body="true">
+    :append-to-body="true" @close="close">
     <template v-if="props.title != ''" #header>
       <label style="font-size: 1.5em">{{ props.title }}</label>
     </template>
@@ -23,7 +23,7 @@
   </el-drawer>
 </template>
 <script setup lang="ts">
-import { ref, computed, type PropType } from 'vue'
+import { ref, computed, type PropType, watch } from 'vue'
 import { AppLang } from '@/language/app.lang'
 type directionType = 'rtl' | 'ltr' | 'ttb' | 'btt'
 const appLang = AppLang()
@@ -62,13 +62,16 @@ const btnSubmitTitle_C = computed(() => {
 })
 
 const emits = defineEmits(['closed', 'submit'])
+// 所有关闭入口统一通知，不依赖关闭动画完成，及时使异步请求失效。
+watch(drawerVisible, visible => {
+  if (!visible) emits('closed')
+}, { flush: 'sync' })
 
 const open = () => {
   drawerVisible.value = true
 }
 const close = () => {
   drawerVisible.value = false
-  emits('closed')
 }
 // eslint-disable-next-line no-undef
 defineExpose({ open, close })

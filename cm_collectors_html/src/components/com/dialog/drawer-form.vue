@@ -1,7 +1,7 @@
 <template>
   <drawerCommon ref="drawerCommonRef" :width="props.width" :direction="props.direction" :title="props.title"
     :btnSubmitTitle="props.btnSubmitTitle" :btnSubmit="props.btnSubmit" :footer="props.footer"
-    @submit="submitHandle(ruleFormTagRef)">
+    @submit="submitHandle(ruleFormTagRef)" @closed="emits('closed')">
     <el-form ref="ruleFormTagRef" :model="props.modelValue" :rules="props.rules" :label-width="props.labelWidth"
       :label-position="props.labelPosition" status-icon>
       <slot></slot>

@@ -1,6 +1,6 @@
 <template>
   <drawerForm ref="drawerFormRef" :modelValue="formData" :rules="formRules" width="1024px" title="资源"
-    @submit="submitHandle">
+    @submit="submitHandle" @closed="resourceEditorClosed">
     <div class="resource-form-container">
       <div class="resource-form-left">
         <div class="resource-form-class-title">
@@ -101,11 +101,12 @@
           </el-form-item>
           <el-form-item :label="appLang.director()">
             <selectPerformer v-model="directors" :performerBasesIds="store.appStoreData.currentPerformerBasesIds"
-              :careerType="E_performerCareerType.Director" multiple />
+              :careerType="E_performerCareerType.Director" :selectedData="selectedDirectorData" multiple />
           </el-form-item>
           <el-form-item :label="appLang.performer()">
             <selectPerformer v-model="performers" :performerBasesIds="store.appStoreData.currentPerformerBasesIds"
-              :careerType="E_performerCareerType.Performer" multiple />
+              :careerType="E_performerCareerType.Performer" multiple editable :selectedData="selectedPerformerData"
+              :editLoading="performerEditLoading" @edit="editPerformerHandle" />
           </el-form-item>
           <el-form-item label="摘要">
             <el-input v-model="formData.abstract" :rows="4" type="textarea" />
@@ -127,6 +128,7 @@
       </div>
     </template>
   </drawerForm>
+  <performerFormDrawer ref="performerFormDrawerRef" sharedEditNotice @success="performerEditSuccess" />
   <serverFileManagementDialog ref="serverFileManagementDialogRef" :no-close-option="true"
     @selectedFiles="selectedFilesHandle">
   </serverFileManagementDialog>
@@ -144,6 +146,9 @@ import selectDefinition from '../com/form/selectDefinition.vue'
 import selectStarSet from '../com/form/selectStarSet.vue'
 import selectTag from '../com/form/selectTag.vue'
 import selectPerformer from '../com/form/selectPerformer.vue'
+import performerFormDrawer from '../performer/performerFormDrawer.vue';
+import { performerServer } from '@/server/performer.server';
+import type { I_performer, I_performerBasic } from '@/dataType/performer.dataType';
 import { ElMessage, type FormRules } from 'element-plus'
 import { E_resourceDramaSeriesType } from '@/dataType/app.dataType'
 import type { I_resource, I_resource_base, I_resourceDramaSeries_base } from '@/dataType/resource.dataType'
@@ -201,6 +206,39 @@ const defaultFormData: I_resource_base = {
 
 const formData = ref<I_resource_base>({ ...defaultFormData })
 const performers = ref<string[]>([]);
+const performerFormDrawerRef = ref<InstanceType<typeof performerFormDrawer>>();
+const performerEditLoading = ref(false);
+const knownPerformers = ref<Record<string, I_performerBasic>>({});
+const selectedPerformerData = computed(() => performers.value.map(id => knownPerformers.value[id]).filter(Boolean));
+const selectedDirectorData = computed(() => directors.value.map(id => knownPerformers.value[id]).filter(Boolean));
+let formSession = 0;
+const resourceEditorClosed = () => {
+  formSession++;
+  performerEditLoading.value = false;
+  performerFormDrawerRef.value?.close();
+};
+const editPerformerHandle = async (id: string) => {
+  if (performerEditLoading.value) return;
+  const session = formSession;
+  performerEditLoading.value = true;
+  try {
+    const result = await performerServer.infoById(id);
+    if (session !== formSession) return;
+    if (!result.status) {
+      ElMessage.error(result.msg || '加载演员详情失败');
+      return;
+    }
+    performerFormDrawerRef.value?.open('edit', result.data);
+  } catch {
+    if (session === formSession) ElMessage.error('加载演员详情失败，请稍后重试');
+  } finally {
+    if (session === formSession) performerEditLoading.value = false;
+  }
+};
+const performerEditSuccess = (_isAdd: boolean, performer: I_performer) => {
+  // 只更新演员展示数据，不重新初始化资源表单或改动关联 ID。
+  knownPerformers.value[performer.id] = performer;
+};
 const directors = ref<string[]>([]);
 const tags = ref<Record<string, string[]>>({});
 const dramaSeries = ref<I_resourceDramaSeries_base[]>([]);
@@ -246,6 +284,8 @@ const cropperHeight_C = computed(() => {
 })
 
 const init = (_mode: 'add' | 'edit', res: I_resource | null = null) => {
+  formSession++;
+  knownPerformers.value = Object.fromEntries([...(res?.performers || []), ...(res?.directors || [])].map(item => [item.id, item]));
   mode = _mode;
   setImageRef.value?.init();
   store.appStoreData.currentTagClass.forEach(item => {

@@ -1,6 +1,8 @@
 <template>
   <drawerForm ref="drawerFormRef" :modelValue="formData" :rules="formRules" width="800px" :title="appLang.performer()"
     @submit="submitHandle">
+    <el-alert v-if="sharedEditNotice" title="修改将同步到所有关联该演员的资源；演员资料单独保存。"
+      type="info" :closable="false" style="margin-bottom: 16px" />
     <div class="performer-form-container">
       <div class="performer-form-left">
         <div class="performer-form-photo">
@@ -79,6 +81,7 @@ const store = {
   appStoreData: appStoreData(),
 }
 const props = defineProps({
+  sharedEditNotice: { type: Boolean, default: false },
   performerBasesId: {
     type: String,
     default: '',
@@ -172,7 +175,7 @@ const open = (_mode: 'add' | 'edit', _performer: I_performer | null = null) => {
 }
 
 // eslint-disable-next-line no-undef
-defineExpose({ open })
+defineExpose({ open, close: () => drawerFormRef.value?.close() })
 </script>
 <style lang="scss" scoped>
 .performer-form-container {
