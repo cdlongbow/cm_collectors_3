@@ -69,12 +69,10 @@
 
     <div v-else class="mobile-short-video">
       <section class="mobile-short-player-shell">
-        <videoPlayComponent ref="videoPlayRef" class="mobile-short-player" :use-video-play-controls="false" />
-        <div v-if="shortVideoLoading" class="mobile-short-player-state">
-          <span class="mobile-short-loading"></span>
-          <span>正在加载</span>
-        </div>
-        <div v-else-if="!currentDramaSeriesId" class="mobile-short-player-state">
+        <mobileVideoPlayer v-if="currentResource && currentDramaSeriesId" ref="videoPlayRef"
+          class="mobile-short-player" :resource-id="currentResource.id" :drama-series-id="currentDramaSeriesId"
+          :title="currentResource.title" :autoplay="resumeOnSwitch" />
+        <div v-else class="mobile-short-player-state">
           <el-icon><VideoPlay /></el-icon>
           <span>暂无可播放视频</span>
         </div>
@@ -122,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties, type PropType } from 'vue'
+import { computed, defineAsyncComponent, ref, watch, type CSSProperties, type PropType } from 'vue'
 import { Picture, VideoPlay } from '@element-plus/icons-vue'
 import type { I_resource } from '@/dataType/resource.dataType'
 import type { T_resourcesShowMode } from '@/dataType/app.dataType'
@@ -130,8 +128,9 @@ import { getResourceCoverPoster } from '@/common/photo'
 import { getResourceDurationText } from '@/common/videoDuration'
 import { appStoreData } from '@/storeData/app.storeData'
 import { AppLang } from '@/language/app.lang'
-import videoPlayComponent from '@/components/play/videoPlay.vue'
-import { getPlayVideoURLAndType, playUpdate } from '@/common/play'
+import { playUpdate } from '@/common/play'
+import { readMobileSession, saveMobileSession } from '@/common/mobileSession'
+const mobileVideoPlayer = defineAsyncComponent(() => import('@/components/play/mobileVideoPlayer.vue'))
 
 type MobileLayoutFamily = 'poster' | 'list' | 'wall' | 'immersive'
 
@@ -152,11 +151,9 @@ const emit = defineEmits<{
 
 const store = appStoreData()
 const appLang = AppLang()
-const videoPlayRef = ref<InstanceType<typeof videoPlayComponent>>()
+const videoPlayRef = ref<InstanceType<typeof mobileVideoPlayer>>()
 const currentPlayIndex = ref(0)
-const currentPlayingDramaSeriesId = ref('')
-const shortVideoLoading = ref(false)
-let shortVideoRequestVersion = 0
+const resumeOnSwitch = ref(false)
 
 const mobileLayoutMap: Record<T_resourcesShowMode, MobileLayoutFamily> = {
   coverPoster: 'poster',
@@ -214,63 +211,6 @@ const wallCoverStyle = (resource: I_resource): CSSProperties => {
 
 const selectResource = (resource: I_resource) => emit('select-resource', resource)
 
-const resetShortVideoPlayer = () => {
-  shortVideoRequestVersion++
-  shortVideoLoading.value = false
-  currentPlayingDramaSeriesId.value = ''
-  videoPlayRef.value?.pause()
-  videoPlayRef.value?.resetPlayer()
-}
-
-const playShortVideo = async (index: number, shouldPlay: boolean) => {
-  if (layoutFamily.value !== 'immersive') return
-  const resource = props.dataList[index]
-  const dramaSeries = resource?.dramaSeries[0]
-  currentPlayIndex.value = index
-  if (!resource || !dramaSeries) {
-    resetShortVideoPlayer()
-    return
-  }
-
-  const player = videoPlayRef.value
-  if (!player) return
-  if (dramaSeries.id === currentPlayingDramaSeriesId.value && !shortVideoLoading.value) {
-    if (shouldPlay) player.play()
-    if (shouldPlay) void playUpdate(resource.id, dramaSeries.id)
-    return
-  }
-
-  const requestVersion = ++shortVideoRequestVersion
-  shortVideoLoading.value = true
-  currentPlayingDramaSeriesId.value = dramaSeries.id
-  player.pause()
-  try {
-    const { playUrl, playType } = await getPlayVideoURLAndType(dramaSeries.id)
-    if (requestVersion !== shortVideoRequestVersion) return
-    if (!playUrl) throw new Error('播放地址为空')
-    player.setVideoSource(playUrl, playType, () => {
-      if (requestVersion !== shortVideoRequestVersion) return
-      shortVideoLoading.value = false
-      player.addTextTrack(`/api/video/subtitle/${dramaSeries.id}`, '默认字幕', 'zh', true)
-      if (shouldPlay) {
-        void player.play()
-        void playUpdate(resource.id, dramaSeries.id)
-      } else {
-        player.pause()
-      }
-    }, dramaSeries.src || resource.title, 0, () => {
-      if (requestVersion !== shortVideoRequestVersion) return
-      shortVideoLoading.value = false
-      currentPlayingDramaSeriesId.value = ''
-    })
-  } catch (error) {
-    if (requestVersion !== shortVideoRequestVersion) return
-    console.error(error)
-    shortVideoLoading.value = false
-    currentPlayingDramaSeriesId.value = ''
-  }
-}
-
 const playPrevious = () => {
   if (currentPlayIndex.value <= 0) return
   void switchShortVideo(currentPlayIndex.value - 1)
@@ -282,27 +222,31 @@ const playNext = () => {
 }
 
 const switchShortVideo = (index: number) => {
-  const shouldResume = videoPlayRef.value?.isPlaying() || false
-  return playShortVideo(index, shouldResume)
+  resumeOnSwitch.value = videoPlayRef.value?.isPlaying() || false
+  currentPlayIndex.value = index
+  const resource = props.dataList[index]
+  const episode = resource?.dramaSeries[0]
+  if (resumeOnSwitch.value && episode) void playUpdate(resource.id, episode.id)
 }
 
 watch(
-  [layoutFamily, resourceListKey],
-  ([family, listKey], [previousFamily, previousListKey]) => {
-    if (family !== 'immersive') {
-      if (previousFamily === 'immersive') resetShortVideoPlayer()
-      return
-    }
-    if (family !== previousFamily || listKey !== previousListKey) {
-      resetShortVideoPlayer()
-      currentPlayIndex.value = 0
-      nextTick(() => void playShortVideo(0, false))
-    }
+  [layoutFamily, resourceListKey, () => store.currentFilesBases.id],
+  () => {
+    resumeOnSwitch.value = false
+    const saved = readMobileSession().inlineVideo
+    const savedIndex = saved?.filesBasesId === store.currentFilesBases.id
+      ? props.dataList.findIndex(resource => resource.id === saved.resourceId) : -1
+    currentPlayIndex.value = savedIndex >= 0 ? savedIndex : 0
   },
-  { immediate: true },
+  { flush: 'sync', immediate: true },
 )
+watch(() => [layoutFamily.value, currentResource.value?.id], () => {
+  if (layoutFamily.value === 'immersive' && currentResource.value) {
+    saveMobileSession({ inlineVideo: { filesBasesId: store.currentFilesBases.id,
+      resourceId: currentResource.value.id } })
+  }
+}, { flush: 'post', immediate: true })
 
-onBeforeUnmount(resetShortVideoPlayer)
 </script>
 
 <style scoped lang="scss">

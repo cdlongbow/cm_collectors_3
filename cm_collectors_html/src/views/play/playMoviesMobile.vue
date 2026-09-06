@@ -5,7 +5,9 @@
 
     <!-- 视频播放器 -->
     <div class="video-container">
-      <videoPlay ref="videoPlayRef" />
+      <mobileVideoPlayer v-if="resourceInfo && selectedDramaSeriesId" :resource-id="resourceId"
+        :drama-series-id="selectedDramaSeriesId" :title="resourceInfo.title" />
+      <div v-if="resourceError" class="resource-error"><p>{{ resourceError }}</p><el-button @click="init">重试</el-button></div>
     </div>
 
     <!-- 剧集选择 -->
@@ -102,9 +104,9 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted, onBeforeUnmount, nextTick, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, nextTick, computed, defineAsyncComponent } from "vue";
 import { useRouter } from 'vue-router';
-import videoPlay from "@/components/play/videoPlay.vue";
+const mobileVideoPlayer = defineAsyncComponent(() => import('@/components/play/mobileVideoPlayer.vue'));
 import type { I_resource, I_resourceDramaSeries } from '@/dataType/resource.dataType';
 import detailsSampleImages from '@/components/details/detailsSampleImages.vue'
 import { resourceServer } from '@/server/resource.server';
@@ -114,7 +116,7 @@ import { AppLang } from '@/language/app.lang';
 import { appStoreData } from "@/storeData/app.storeData";
 import resourceDramaSeriesList from '@/components/resource/resourceDramaSeriesList.vue'
 import MobileHeader from '../MobileHeaderView.vue'
-import { getPlayVideoURLAndType, playUpdate } from "@/common/play";
+import { playUpdate } from "@/common/play";
 
 const appLang = AppLang();
 const router = useRouter();
@@ -122,7 +124,7 @@ const router = useRouter();
 const store = {
   appStoreData: appStoreData(),
 }
-const videoPlayRef = ref<InstanceType<typeof videoPlay>>();
+const resourceError = ref('');
 const resourceInfo = ref<I_resource>();
 const selectedDramaSeriesId = ref<string>('');
 const loading = ref(false);
@@ -156,27 +158,31 @@ const init = async () => {
 };
 
 const getResourceInfo = async () => {
+  const request = ++videoRequestVersion;
   loading.value = true;
+  resourceError.value = '';
   try {
     const result = await resourceServer.info(props.resourceId);
+    if (request !== videoRequestVersion) return false;
     if (!result || !result.status) {
-      ElMessage.error(result?.msg || '资源信息加载失败');
+      resourceError.value = result?.msg || '资源信息加载失败，请检查连接或资源是否仍存在';
       return false;
     }
     resourceInfo.value = result.data;
     return true
   } catch (error) {
+    if (request !== videoRequestVersion) return false;
     console.error(error)
-    ElMessage.error('资源信息加载失败')
+    resourceError.value = '资源信息加载失败，请检查网络后重试';
     return false
   } finally {
-    loading.value = false;
+    if (request === videoRequestVersion) loading.value = false;
   }
 };
 
 const setVideoDramaSeries = () => {
   let dramaSeriesId = '';
-  if (props.dramaSeriesId !== '') {
+  if (props.dramaSeriesId !== '' && resourceInfo.value?.dramaSeries.some(item => item.id === props.dramaSeriesId)) {
     dramaSeriesId = props.dramaSeriesId;
   } else if (resourceInfo.value && resourceInfo.value.dramaSeries.length > 0) {
     dramaSeriesId = resourceInfo.value.dramaSeries[0].id;
@@ -189,33 +195,9 @@ const setVideoDramaSeries = () => {
 };
 
 const setVideoSource = async (dramaSeriesId: string) => {
-  const requestVersion = ++videoRequestVersion
   selectedDramaSeriesId.value = dramaSeriesId;
-  const vp = videoPlayRef.value;
-  if (!vp) return;
-  loading.value = true
-  try {
-    const { playUrl, playType } = await getPlayVideoURLAndType(dramaSeriesId)
-    if (requestVersion !== videoRequestVersion) return
-    if (!playUrl) throw new Error('播放地址为空')
-    vp.setVideoSource(playUrl, playType, () => {
-      if (requestVersion !== videoRequestVersion) return
-      loading.value = false
-      vp.addTextTrack(
-        `/api/video/subtitle/${dramaSeriesId}`,
-        '默认字幕',
-        'zh',
-        true
-      );
-    }, resourceInfo.value?.title || '', 0, () => {
-      if (requestVersion === videoRequestVersion) loading.value = false
-    });
-  } catch (error) {
-    if (requestVersion !== videoRequestVersion) return
-    console.error(error)
-    loading.value = false
-    ElMessage.error('视频加载失败')
-  }
+  const path = `/play/moviesMobile/${encodeURIComponent(props.resourceId)}/${encodeURIComponent(dramaSeriesId)}`;
+  if (router.currentRoute.value.path !== path) await router.replace(path);
 };
 
 const noPlayList = () => {
@@ -235,7 +217,8 @@ const playResourceDramaSeriesHandle = (ds: I_resourceDramaSeries) => {
 const handleMenuAction = (action: string) => {
   switch (action) {
     case 'goBack':
-      router.go(-1);
+      if (window.history.state?.back) router.go(-1);
+      else router.replace('/mobile');
       break;
     case 'goHome':
       router.push('/');
@@ -251,7 +234,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   videoRequestVersion++
-  videoPlayRef.value?.resetPlayer()
 })
 </script>
 
