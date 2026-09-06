@@ -11,6 +11,12 @@
           <el-icon><Monitor /></el-icon>
           <span>桌面版</span>
         </el-button>
+        <el-dropdown v-if="shellSettingsAvailable" trigger="click" @command="openShellSettings">
+          <el-button circle aria-label="更多"><el-icon><More /></el-icon></el-button>
+          <template #dropdown><el-dropdown-menu>
+            <el-dropdown-item command="server">服务器</el-dropdown-item>
+          </el-dropdown-menu></template>
+        </el-dropdown>
       </div>
 
       <div class="mobile-toolbar-row mobile-search-row">
@@ -27,7 +33,7 @@
       </div>
     </header>
 
-    <main ref="contentScrollerRef" class="mobile-content"
+    <main ref="contentScrollerRef" class="mobile-content" @scroll.passive="scheduleSaveList"
       :class="{ 'mobile-content--short-video': isShortVideoMode }">
       <MobileResourceLayout :data-list="dataList" :mode="resourceShowMode"
         @select-resource="selectResourceHandle" />
@@ -63,8 +69,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, Filter, Monitor, Search } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, onMounted, onActivated, onDeactivated, nextTick, ref, watch } from 'vue'
+import { ArrowLeft, ArrowRight, Filter, Monitor, More, Search } from '@element-plus/icons-vue'
+import { onBeforeRouteLeave } from 'vue-router'
+import { useMobileShellSettings } from '@/common/mobileShell'
 import MobileResourceLayout from '@/components/mobile/MobileResourceLayout.vue'
 import TagView from './TagView.vue'
 import { appStoreData } from '@/storeData/app.storeData'
@@ -78,6 +86,7 @@ import { ElMessage } from 'element-plus'
 import { playResource } from '@/common/play'
 import { goToMobileOrPC, setMobileShow } from '@/assets/mobile'
 import { E_searchSort } from '@/dataType/search.dataType'
+import { readMobileSession, saveMobileSession } from '@/common/mobileSession'
 
 const store = {
   appStoreData: appStoreData(),
@@ -86,6 +95,7 @@ const store = {
 }
 
 let fetchCount = true
+const { available: shellSettingsAvailable, openSettings: openShellSettings } = useMobileShellSettings()
 let durationRefreshTimer: number | undefined
 let dataListRequestVersion = 0
 let randomSeed = ''
@@ -100,6 +110,32 @@ const selectedDataBaseId = ref(store.appStoreData.currentFilesBases.id)
 const searchText = ref(store.searchStoreData.searchData.searchTextSlc.join(' '))
 const filterDrawerVisible = ref(false)
 const contentScrollerRef = ref<HTMLElement>()
+let saveListTimer: number | undefined
+let listActive = true
+const searchKey = () => JSON.stringify(store.searchStoreData.searchData)
+const restoredList = readMobileSession().list
+let pendingScroll: number | null = null
+if (restoredList?.filesBasesId === selectedDataBaseId.value && restoredList.searchKey === searchKey()
+  && restoredList.pageSize === pageSize.value) {
+  currentPage.value = Math.max(1, Math.floor(restoredList.page) || 1)
+  randomSeed = restoredList.randomSeed || ''
+  searchText.value = restoredList.searchText || searchText.value
+  pendingScroll = Math.max(0, restoredList.scrollTop || 0)
+}
+const saveList = () => {
+  window.clearTimeout(saveListTimer)
+  if (!listActive) return
+  saveMobileSession({ list: {
+    filesBasesId: selectedDataBaseId.value, searchKey: searchKey(), page: currentPage.value,
+    pageSize: pageSize.value, scrollTop: pendingScroll ?? contentScrollerRef.value?.scrollTop ?? 0,
+    randomSeed, searchText: searchText.value,
+  } })
+}
+const scheduleSaveList = () => {
+  window.clearTimeout(saveListTimer)
+  saveListTimer = window.setTimeout(saveList, 200)
+}
+watch([currentPage, searchText], scheduleSaveList)
 
 const isBrightTheme = computed(() => store.appStoreData.appConfig.theme === 'bright')
 const resourceShowMode = computed<T_resourcesShowMode>(() =>
@@ -147,6 +183,7 @@ watch(
     randomSeed = store.searchStoreData.searchData.sort === E_searchSort.Random ? createRandomSeed() : ''
     fetchCount = true
     currentPage.value = 1
+    pendingScroll = null
     getDataList(scrollContentToTop)
   },
   { deep: true },
@@ -181,7 +218,14 @@ const executeGetDataList = debounce(async (requestVersion: number, callback: () 
         fetchCount = false
       }
       scheduleDurationRefresh()
+      if (currentPage.value > totalPages.value) {
+        currentPage.value = totalPages.value
+        getDataList(scrollContentToTop)
+        return
+      }
       callback()
+      await restoreListScroll()
+      scheduleSaveList()
     } else {
       ElMessage.error(result?.msg || '资源加载失败')
     }
@@ -221,7 +265,16 @@ const scheduleDurationRefresh = () => {
   }, 2500)
 }
 
-const scrollContentToTop = () => contentScrollerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+const restoreListScroll = async () => {
+  await nextTick()
+  if (!listActive || pendingScroll === null || !dataList.value.length || !contentScrollerRef.value) return
+  contentScrollerRef.value.scrollTop = pendingScroll
+  pendingScroll = null
+}
+const scrollContentToTop = () => {
+  pendingScroll = null
+  contentScrollerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 const prevPage = () => {
   if (currentPage.value <= 1) return
@@ -235,7 +288,10 @@ const nextPage = () => {
   getDataList(scrollContentToTop)
 }
 
-const selectResourceHandle = (resource: I_resource) => playResource(resource)
+const selectResourceHandle = (resource: I_resource) => {
+  saveList()
+  return playResource(resource)
+}
 
 const changeDataBase = async (selectedId: string) => {
   if (!selectedId || selectedId === store.appStoreData.currentFilesBases.id) return
@@ -275,9 +331,31 @@ const switchToDesktop = () => {
   goToMobileOrPC()
 }
 
+const onListHidden = () => { if (document.hidden) saveList() }
+onBeforeRouteLeave(() => {
+  // DOM 移出 KeepAlive 前保存；移出后读取 scrollTop 可能已变为 0。
+  pendingScroll = pendingScroll ?? contentScrollerRef.value?.scrollTop ?? 0
+  saveList()
+  listActive = false
+  window.clearTimeout(saveListTimer)
+})
 onMounted(() => getDataList())
+onActivated(() => {
+  listActive = true
+  void restoreListScroll()
+  document.addEventListener('visibilitychange', onListHidden)
+  window.addEventListener('pagehide', saveList)
+})
+onDeactivated(() => {
+  listActive = false
+  document.removeEventListener('visibilitychange', onListHidden)
+  window.removeEventListener('pagehide', saveList)
+})
 
 onBeforeUnmount(() => {
+  saveList()
+  document.removeEventListener('visibilitychange', onListHidden)
+  window.removeEventListener('pagehide', saveList)
   dataListRequestVersion++
   window.clearTimeout(durationRefreshTimer)
 })

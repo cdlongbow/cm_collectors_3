@@ -11,6 +11,7 @@
       <div class="menu-popup" @click.stop>
         <div class="menu-item" @click="goBack">返回</div>
         <div class="menu-item" @click="goToHome">首页</div>
+        <div v-if="shellSettingsAvailable" class="menu-item" @click="openServerSettings">服务器</div>
         <div class="menu-item" @click="showMenu = false">取消</div>
       </div>
     </div>
@@ -20,9 +21,12 @@
 <script lang="ts" setup>
 import { ref } from "vue";
 import { useRouter } from 'vue-router';
+import { useMobileShellSettings } from '@/common/mobileShell';
 
 const router = useRouter();
 const showMenu = ref(false);
+const { available: shellSettingsAvailable, openSettings } = useMobileShellSettings();
+const openServerSettings = () => { showMenu.value = false; openSettings(); };
 
 const props = defineProps({
   title: {
@@ -37,7 +41,10 @@ const props = defineProps({
 
 // 返回上一页
 const goBack = () => {
-  router.go(-1);
+  showMenu.value = false;
+  const previous = router.options.history.state.back;
+  if (typeof previous === 'string' && previous.startsWith('/') && !previous.startsWith('//') && !previous.startsWith('/__cm_shell__/')) router.back();
+  else void router.replace('/mobile');
 };
 
 // 返回首页
