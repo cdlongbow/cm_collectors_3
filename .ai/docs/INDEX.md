@@ -17,4 +17,6 @@
 
 ## Testing
 
+- [文件库公共基础配置](design/shared-library-config.md)：按分组跟随、独立字段边界、分期提交和回归验证。
+
 - [测试指南](testing/testing-guide.md)：已有测试入口、建议验证方式和验收清单。

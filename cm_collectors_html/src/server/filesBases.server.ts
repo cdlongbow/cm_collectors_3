@@ -1,3 +1,5 @@
+import { ElMessageBox } from 'element-plus';
+import { sharedConfigServer } from './sharedConfig.server';
 import request from "@/assets/request";
 import type { E_config_type, I_config_app } from "@/dataType/config.dataType";
 import type { I_filesBases, I_filesBases_base, I_filesBases_sort } from "@/dataType/filesBases.dataType";
@@ -22,7 +24,7 @@ export const filesBasesServer = {
       }
     });
   },
-  create: async (name: string, mainPerformerBasesId: string, relatedPerformerBasesIds: string[]) => {
+  create: async (name: string, mainPerformerBasesId: string, relatedPerformerBasesIds: string[], followModules: string[] = []) => {
     return await request<I_filesBases>({
       url: `${routerGroupUri}/filesBases/create`,
       method: 'post',
@@ -30,6 +32,7 @@ export const filesBasesServer = {
         name,
         mainPerformerBasesId,
         relatedPerformerBasesIds,
+        followModules,
       },
     });
   },
@@ -57,6 +60,15 @@ export const filesBasesServer = {
     });
   },
   setFilesBasesConfigById: async (id: string, config: I_config_app) => {
+    const status = await sharedConfigServer.status(id, 'display');
+    if (!status.status) return { status: false, msg: status.msg, data: false };
+    if (status.data.following && status.data.fields.some(key => JSON.stringify((config as unknown as Record<string, unknown>)[key]) !== JSON.stringify(status.data.config[key]))) {
+      try {
+        await ElMessageBox.confirm('当前基础展示设置跟随公共配置。继续将关闭本库的跟随并保存此次调整，其他库不受影响。', '改为本库自定义');
+      } catch { return { status: false, msg: '已取消修改', data: false }; }
+      const result = await sharedConfigServer.follow(id, 'display', false, status.data.revision);
+      if (!result.status) return result;
+    }
     return await request<boolean>({
       url: `${routerGroupUri}/filesBases/setConfig/filesBases`,
       method: 'put',

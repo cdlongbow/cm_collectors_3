@@ -35,6 +35,7 @@ import { appStoreData } from '@/storeData/app.storeData';
 import { ref, onMounted, watch, computed, type PropType } from 'vue';
 import contentStyleIndex from './contentStyleIndex.vue';
 import type { T_resourcesShowMode } from '@/dataType/app.dataType';
+import { ElMessage } from 'element-plus';
 import { filesBasesServer } from '@/server/filesBases.server';
 const store = {
   appStoreData: appStoreData(),
@@ -98,7 +99,7 @@ const selectResourcesHandle = (item: I_resource) => {
   emits('selectResources', item)
 }
 
-const closeModuleHandle = () => {
+const closeModuleHandle = async () => {
   switch (props.moduleType) {
     case 'casualView':
       store.appStoreData.currentConfigApp.casualViewModule = false;
@@ -111,7 +112,12 @@ const closeModuleHandle = () => {
       break;
     default:
   }
-  filesBasesServer.setFilesBasesConfigById(store.appStoreData.currentFilesBases.id, store.appStoreData.currentConfigApp);
+  const id = store.appStoreData.currentFilesBases.id;
+  const result = await filesBasesServer.setFilesBasesConfigById(id, store.appStoreData.currentConfigApp);
+  if (!result.status) {
+    ElMessage.warning(result.msg);
+    await store.appStoreData.initCurrentFilesBases(id);
+  }
 }
 
 // 监听 currentFilesBases.id 的变化

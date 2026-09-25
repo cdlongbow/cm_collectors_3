@@ -1,0 +1,248 @@
+package models
+
+import (
+	"cm_collectors_server/datatype"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// SharedLibraryConfig 只存放明确允许共享的参数，不存路径、标签或演员引用。
+type SharedLibraryConfig struct {
+	Module   string `json:"module" gorm:"primaryKey;size:32"`
+	Revision int    `json:"revision"`
+	Config   string `json:"-" gorm:"type:text"`
+}
+
+type LibraryConfigFollow struct {
+	FilesBasesID string `json:"filesBasesId" gorm:"column:filesBases_id;primaryKey;type:char(20)"`
+	Module       string `json:"module" gorm:"primaryKey;size:32"`
+}
+
+type SharedConfigState struct {
+	Module    string                 `json:"module"`
+	Available bool                   `json:"available"`
+	Following bool                   `json:"following"`
+	Revision  int                    `json:"revision"`
+	Fields    []string               `json:"fields"`
+	Config    map[string]interface{} `json:"config"`
+	Libraries []SharedConfigLibrary  `json:"libraries"`
+}
+
+type SharedConfigLibrary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// 白名单也是前端字段锁定的来源。封面预设列表及索引相互依赖，保留本库独立。
+func SharedConfigFields(module string) []string {
+	if module == "display" {
+		return strings.Fields(`country resourceSort definition leftDisplay leftColumnMode leftColumnWidth leftColumnFloatAutoHide
+		 tagMode tagFixedModeRowShowNum showCustomTagResourceCount performerPhoto shieldNoPerformerPhoto performerShowNum
+		 pageLimit resourcesShowMode showVideoDuration coverPosterBoxInfoWidth coverPosterWaterfallColumn coverTitleAlign
+		 resourceJustifyContent detailsDramaSeriesMode resourceDetailsShowMode detailsVisibleFields coverDisplayTagAttribute
+		 coverDisplayTagRgbas coverDisplayTagColors coverDisplayTagFontSize casualViewModule casualViewNumber historyModule
+		 historyNumber hotModule hotNumber sampleStatus sampleShowMax openResModeMovies openResModeMovies_SoftType
+		 openResModeComic openResModeAtlas videoPreviewImageCount performer_Text director_Text showPerformerResourceCount
+		 plugInUnit_Cup plugInUnit_Cup_Text coverPosterWidthStatus coverPosterWidthBase coverPosterHeightStatus
+		 coverPosterHeightBase coverPosterGap contentPadding`)
+	}
+	return nil
+}
+
+func sharedConfigColumn(module string) string {
+	switch module {
+	case "display":
+		return "config_json_data"
+	}
+	return ""
+}
+
+func parseConfig(raw string) (map[string]interface{}, error) {
+	value := map[string]interface{}{}
+	if raw == "" {
+		return value, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &value); err != nil || value == nil {
+		return nil, errors.New("配置必须为有效的 JSON 对象")
+	}
+	return value, nil
+}
+
+func sharedFieldsOnly(module string, value map[string]interface{}) map[string]interface{} {
+	result := map[string]interface{}{}
+	for _, field := range SharedConfigFields(module) {
+		if v, ok := value[field]; ok {
+			result[field] = v
+		}
+	}
+	return result
+}
+
+func SharedConfigStatus(db *gorm.DB, id, module string) (*SharedConfigState, error) {
+	fields := SharedConfigFields(module)
+	if len(fields) == 0 {
+		return nil, errors.New("不支持的公共配置分组")
+	}
+	state := &SharedConfigState{Module: module, Fields: fields, Config: map[string]interface{}{}, Libraries: []SharedConfigLibrary{}}
+	var config SharedLibraryConfig
+	err := db.Where("module = ?", module).Take(&config).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if err == nil {
+		state.Available, state.Revision = true, config.Revision
+		state.Config, err = parseConfig(config.Config)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var count int64
+	if err := db.Model(&LibraryConfigFollow{}).Where("filesBases_id = ? AND module = ?", id, module).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	state.Following = count > 0
+	err = db.Table("library_config_follows AS f").Select("b.id, b.name").Joins("JOIN filesBases AS b ON b.id = f.filesBases_id").Where("f.module = ?", module).Order("b.sort, b.id").Scan(&state.Libraries).Error
+	return state, err
+}
+
+// EffectiveLibraryConfig 是普通配置读取的唯一叠加点；独立库原样返回，保留空配置语义。
+func EffectiveLibraryConfig(db *gorm.DB, id, module, raw string) (string, error) {
+	if sharedConfigColumn(module) == "" {
+		return raw, nil
+	}
+	var follow LibraryConfigFollow
+	err := db.Where("filesBases_id = ? AND module = ?", id, module).Take(&follow).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return raw, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var config SharedLibraryConfig
+	if err := db.Where("module = ?", module).Take(&config).Error; err != nil {
+		return "", fmt.Errorf("公共配置不可用，请检查配置: %w", err)
+	}
+	local, err := parseConfig(raw)
+	if err != nil {
+		return "", err
+	}
+	shared, err := parseConfig(config.Config)
+	if err != nil {
+		return "", err
+	}
+	for k, v := range sharedFieldsOnly(module, shared) {
+		local[k] = v
+	}
+	data, err := json.Marshal(local)
+	return string(data), err
+}
+
+// GuardSharedConfigWrite 防止旧页面、快捷操作及任务保存绕过跟随边界。
+func GuardSharedConfigWrite(db *gorm.DB, id, module, incoming string) error {
+	state, err := SharedConfigStatus(db, id, module)
+	if err != nil {
+		return err
+	}
+	if !state.Following {
+		return nil
+	}
+	data, err := parseConfig(incoming)
+	if err != nil {
+		return err
+	}
+	for k, expected := range state.Config {
+		if !reflect.DeepEqual(data[k], expected) {
+			return errors.New("该分组正在跟随公共配置，请先关闭跟随再修改，或重新加载最新配置")
+		}
+	}
+	return nil
+}
+
+func SaveSharedConfig(db *gorm.DB, module string, revision int, raw string) error {
+	if len(SharedConfigFields(module)) == 0 {
+		return errors.New("不支持的公共配置分组")
+	}
+	value, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	value = sharedFieldsOnly(module, value)
+	// 要求完整白名单，避免从残缺旧配置创建出随库默认值漂移的公共配置。
+	if len(value) != len(SharedConfigFields(module)) {
+		return errors.New("公共配置不完整，请重新打开设置页后再保存")
+	}
+	for _, v := range value {
+		if v == nil {
+			return errors.New("公共配置不能包含空值")
+		}
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	var typed datatype.Config_FilesBases
+	if err := json.Unmarshal(data, &typed); err != nil {
+		return fmt.Errorf("公共配置参数类型错误: %w", err)
+	}
+	if _, ok := value["casualViewModule"].(bool); !ok {
+		return errors.New("随便看看开关必须为布尔值")
+	}
+	if n, ok := value["casualViewNumber"].(float64); !ok || n < 0 || n != float64(int(n)) {
+		return errors.New("随便看看数量必须为非负整数")
+	}
+	if revision == 0 {
+		err := db.Create(&SharedLibraryConfig{Module: module, Revision: 1, Config: string(data)}).Error
+		if err != nil {
+			return fmt.Errorf("公共配置创建失败，请刷新后重试: %w", err)
+		}
+		return nil
+	}
+	result := db.Model(&SharedLibraryConfig{}).Where("module = ? AND revision = ?", module, revision).Updates(map[string]interface{}{"config": string(data), "revision": revision + 1})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("公共配置已被其他页面修改，请重新加载后再保存")
+	}
+	return nil
+}
+
+// SetLibraryConfigFollow 必须在事务中调用。退出时物化当前生效配置，不能恢复历史本地值。
+func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revision int) error {
+	state, err := SharedConfigStatus(db, id, module)
+	if err != nil {
+		return err
+	}
+	if !state.Available || state.Revision != revision {
+		return errors.New("公共配置已变化或尚未创建，请刷新后重试")
+	}
+	var library FilesBases
+	if err := db.Where("id = ?", id).Take(&library).Error; err != nil {
+		return err
+	}
+	if following {
+		return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&LibraryConfigFollow{FilesBasesID: id, Module: module}).Error
+	}
+	if !state.Following {
+		return nil
+	}
+	var setting FilesBasesSetting
+	if err := db.Where("filesBases_id = ?", id).Take(&setting).Error; err != nil {
+		return err
+	}
+	raw := setting.ConfigJsonData
+	effective, err := EffectiveLibraryConfig(db, id, module, raw)
+	if err != nil {
+		return err
+	}
+	if err := db.Model(&FilesBasesSetting{}).Where("filesBases_id = ?", id).Update(sharedConfigColumn(module), effective).Error; err != nil {
+		return err
+	}
+	return db.Where("filesBases_id = ? AND module = ?", id, module).Delete(&LibraryConfigFollow{}).Error
+}

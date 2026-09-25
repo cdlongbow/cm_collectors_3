@@ -393,6 +393,7 @@ const saveConfig = debounceNow(async () => {
   const result = await filesBasesServer.setFilesBasesConfigById(store.appStoreData.currentFilesBases.id, store.appStoreData.currentConfigApp);
   if (!result.status) {
     ElMessage.error(result.msg);
+    await store.appStoreData.initCurrentFilesBases(store.appStoreData.currentFilesBases.id);
     return;
   } else {
     ElMessage.success('保存成功');

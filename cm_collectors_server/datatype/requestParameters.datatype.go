@@ -106,6 +106,7 @@ type ReqParam_ResourceSwapAddTime struct {
 
 // 请求参数 - 创建filesBases
 type ReqParam_CreateFilesBases struct {
+	FollowModules            []string `json:"followModules"`
 	Name                     string   `json:"name" binding:"required"`
 	MainPerformerBasesId     string   `json:"mainPerformerBasesId" binding:"required"`
 	RelatedPerformerBasesIds []string `json:"relatedPerformerBasesIds"`

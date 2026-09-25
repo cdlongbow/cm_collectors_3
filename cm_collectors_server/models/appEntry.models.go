@@ -28,6 +28,8 @@ func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&FilesBases{},
 		&FilesBasesSetting{},
+		&SharedLibraryConfig{},
+		&LibraryConfigFollow{},
 		&FilesRelatedPerformerBases{},
 		&Performer{},
 		&PerformerBases{},
@@ -512,6 +514,7 @@ func AutoDatabase(db *gorm.DB) error {
 				return migrateResourceSubtitleSchema(tx)
 			},
 		},
+		{ID: "shared_library_config_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&SharedLibraryConfig{}, &LibraryConfigFollow{}) }},
 	})
 	errMigrate := m.Migrate()
 	if errMigrate != nil {

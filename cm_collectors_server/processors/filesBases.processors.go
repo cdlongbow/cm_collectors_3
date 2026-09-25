@@ -26,7 +26,12 @@ func (FilesBases) InfoById(id string) (*models.FilesBases, error) {
 }
 
 func (FilesBases) InfoDetailsById(id string) (*models.FilesBasesDetails, error) {
-	return models.FilesBases{}.InfoDetails(core.DBS(), id)
+	info, err := models.FilesBases{}.InfoDetails(core.DBS(), id)
+	if err != nil {
+		return nil, err
+	}
+	info.FilesBasesSetting.ConfigJsonData, err = models.EffectiveLibraryConfig(core.DBS(), id, "display", info.FilesBasesSetting.ConfigJsonData)
+	return info, err
 }
 
 func (FilesBases) GetMainPerformerBasesId(filesBasesID string) (string, error) {
@@ -82,7 +87,7 @@ func (t FilesBases) ConfigById(id, configType string) (string, error) {
 	}
 	switch configType {
 	case "filesBases":
-		return filesBasesSettingInfo.ConfigJsonData, nil
+		return models.EffectiveLibraryConfig(core.DBS(), id, "display", filesBasesSettingInfo.ConfigJsonData)
 	case "importScanDisk":
 		return filesBasesSettingInfo.ScanDiskJsonData, nil
 	case "importNfo":
@@ -94,7 +99,7 @@ func (t FilesBases) ConfigById(id, configType string) (string, error) {
 	case "scraperPerformer":
 		return filesBasesSettingInfo.ScraperPerformerJsonData, nil
 	default:
-		return filesBasesSettingInfo.ConfigJsonData, nil
+		return models.EffectiveLibraryConfig(core.DBS(), id, "display", filesBasesSettingInfo.ConfigJsonData)
 	}
 }
 
@@ -329,7 +334,7 @@ func (FilesBases) GetTotal() (int64, error) {
 	return models.FilesBases{}.GetTotal(core.DBS())
 }
 
-func (t FilesBases) Create(name, mainPerformerBasesId string, relatedPerformerBasesIds []string) (string, error) {
+func (t FilesBases) Create(name, mainPerformerBasesId string, relatedPerformerBasesIds []string, followModules ...string) (string, error) {
 	db := core.DBS()
 	id := core.GenerateUniqueID()
 	tagTotal, err := t.GetTotal()
@@ -352,6 +357,15 @@ func (t FilesBases) Create(name, mainPerformerBasesId string, relatedPerformerBa
 		err = models.FilesBasesSetting{}.CreateNull(tx, id)
 		if err != nil {
 			return err
+		}
+		for _, module := range followModules {
+			state, err := models.SharedConfigStatus(tx, id, module)
+			if err != nil {
+				return err
+			}
+			if err := models.SetLibraryConfigFollow(tx, id, module, true, state.Revision); err != nil {
+				return err
+			}
 		}
 		filesRelatedPerformerBasesModelsSlc := []models.FilesRelatedPerformerBases{}
 		if len(relatedPerformerBasesIds) > 0 {

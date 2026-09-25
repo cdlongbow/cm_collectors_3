@@ -36,7 +36,7 @@ func (FilesBases) Create(c *gin.Context) {
 	if err := ParameterHandleShouldBindJSON(c, &par); err != nil {
 		return
 	}
-	id, err := processors.FilesBases{}.Create(par.Name, par.MainPerformerBasesId, par.RelatedPerformerBasesIds)
+	id, err := processors.FilesBases{}.Create(par.Name, par.MainPerformerBasesId, par.RelatedPerformerBasesIds, par.FollowModules...)
 	if err := ResError(c, err); err != nil {
 		return
 	}

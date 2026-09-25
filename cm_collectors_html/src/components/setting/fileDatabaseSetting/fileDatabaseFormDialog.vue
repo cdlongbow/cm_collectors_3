@@ -16,9 +16,16 @@
           :value="item.id" :disabled="item.id == formData.mainPerformerBasesId" />
       </el-checkbox-group>
     </el-form-item>
+    <el-form-item label="公共配置">
+      <el-checkbox-group v-model="followModules">
+        <el-checkbox value="display" :disabled="!displayAvailable" label="跟随基础展示配置" />
+      </el-checkbox-group>
+      <el-text v-if="!displayAvailable" type="info">可先在文件库设置中创建公共配置。</el-text>
+    </el-form-item>
   </dialogForm>
 </template>
 <script lang="ts" setup>
+import { sharedConfigServer } from '@/server/sharedConfig.server';
 import { LoadingService } from '@/assets/loading';
 import dialogForm from '@/components/com/dialog/dialog-form.vue'
 import { filesBasesServer } from '@/server/filesBases.server';
@@ -35,6 +42,8 @@ const emits = defineEmits(['success'])
 
 const dialogFormRef = ref<InstanceType<typeof dialogForm>>()
 
+const followModules = ref<string[]>([]);
+const displayAvailable = ref(false);
 const formData = ref({
   name: '',
   mainPerformerBasesId: store.performerBasesStoreData.activeFirstPerformerBasesId,
@@ -47,7 +56,7 @@ const formRules = reactive<FormRules>({
 const submitHandle = async () => {
   LoadingService.show();
   try {
-    const result = await filesBasesServer.create(formData.value.name, formData.value.mainPerformerBasesId, formData.value.relatedPerformerBasesIds);
+    const result = await filesBasesServer.create(formData.value.name, formData.value.mainPerformerBasesId, formData.value.relatedPerformerBasesIds, followModules.value);
     if (result.status) {
       store.filesBasesStoreData.add(result.data);
       emits('success');
@@ -69,7 +78,11 @@ const mainPerformerBasesChange = () => {
   }
 }
 
-const open = () => {
+const open = async () => {
+  followModules.value = [];
+  displayAvailable.value = false;
+  const result = await sharedConfigServer.status('_new', 'display');
+  if (result.status) displayAvailable.value = result.data.available;
   dialogFormRef.value?.open()
 }
 
