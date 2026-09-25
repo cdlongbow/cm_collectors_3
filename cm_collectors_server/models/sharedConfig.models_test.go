@@ -7,11 +7,12 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 func sharedTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{NamingStrategy: schema.NamingStrategy{SingularTable: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +31,45 @@ func sharedTestDB(t *testing.T) *gorm.DB {
 		}
 	}
 	return db
+}
+
+func TestSharedConfigUsesProductionTableNames(t *testing.T) {
+	db := sharedTestDB(t)
+	for _, name := range []string{"shared_library_config", "library_config_follow"} {
+		if !db.Migrator().HasTable(name) {
+			t.Fatalf("missing production table %s", name)
+		}
+	}
+	for _, name := range []string{"shared_library_configs", "library_config_follows"} {
+		if db.Migrator().HasTable(name) {
+			t.Fatalf("unexpected plural table %s", name)
+		}
+	}
+	// 即使没有公共配置或跟随库，设置页也必须能正常查询状态。
+	state, err := SharedConfigStatus(db, "A", "display")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Available || state.Following || len(state.Libraries) != 0 {
+		t.Fatalf("unexpected initial state: %#v", state)
+	}
+	if err := SaveSharedConfig(db, "display", 0, displayTestConfig(t, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return SetLibraryConfigFollow(tx, "A", "display", true, 1) }); err != nil {
+		t.Fatal(err)
+	}
+	// 再次迁移保持已保存数据，不能通过换表名掩盖查询错误。
+	if err := db.AutoMigrate(&SharedLibraryConfig{}, &LibraryConfigFollow{}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = SharedConfigStatus(db, "A", "display")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Following || state.Revision != 1 || len(state.Libraries) != 1 || state.Libraries[0].ID != "A" {
+		t.Fatalf("migration lost shared configuration: %#v", state)
+	}
 }
 
 func displayTestConfig(t *testing.T, limit int) string {

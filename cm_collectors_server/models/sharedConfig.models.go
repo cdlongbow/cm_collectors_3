@@ -19,10 +19,14 @@ type SharedLibraryConfig struct {
 	Config   string `json:"-" gorm:"type:text"`
 }
 
+func (SharedLibraryConfig) TableName() string { return "shared_library_config" }
+
 type LibraryConfigFollow struct {
 	FilesBasesID string `json:"filesBasesId" gorm:"column:filesBases_id;primaryKey;type:char(20)"`
 	Module       string `json:"module" gorm:"primaryKey;size:32"`
 }
+
+func (LibraryConfigFollow) TableName() string { return "library_config_follow" }
 
 type SharedConfigState struct {
 	Module    string                 `json:"module"`
@@ -120,7 +124,7 @@ func SharedConfigStatus(db *gorm.DB, id, module string) (*SharedConfigState, err
 		return nil, err
 	}
 	state.Following = count > 0
-	err = db.Table("library_config_follows AS f").Select("b.id, b.name").Joins("JOIN filesBases AS b ON b.id = f.filesBases_id").Where("f.module = ?", module).Order("b.sort, b.id").Scan(&state.Libraries).Error
+	err = db.Table((LibraryConfigFollow{}).TableName()+" AS f").Select("b.id, b.name").Joins("JOIN filesBases AS b ON b.id = f.filesBases_id").Where("f.module = ?", module).Order("b.sort, b.id").Scan(&state.Libraries).Error
 	return state, err
 }
 
