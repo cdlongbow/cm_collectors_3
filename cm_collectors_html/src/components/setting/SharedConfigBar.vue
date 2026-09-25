@@ -2,108 +2,303 @@
   <div class="shared-config-bar" v-loading="busy">
     <template v-if="state">
       <div class="actions">
-        <el-switch :model-value="state.following" :disabled="!state.available || editing" active-text="跟随公共配置"
-          @change="toggleFollow" />
-        <el-button v-if="!state.available" @click="savePublic">将当前配置设为公共配置</el-button>
-        <el-button v-else-if="!editing" @click="editPublic">编辑公共配置</el-button>
-        <template v-if="editing">
-          <el-button type="primary" @click="savePublic">保存公共配置</el-button>
-          <el-button @click="cancelEdit">取消编辑</el-button>
-        </template>
+        <el-switch
+          :model-value="state.following"
+          :disabled="!state.available || dialogOpen"
+          active-text="跟随公共配置"
+          @change="toggleFollow"
+        />
+        <el-tag :type="state.following ? 'primary' : 'info'">{{
+          state.following ? '来源：公共配置' : '来源：本库设置'
+        }}</el-tag>
+        <el-button type="primary" plain @click="openEditor">{{
+          state.available ? '打开公共配置' : '创建公共配置…'
+        }}</el-button>
       </div>
-      <p>{{ editing ? '正在编辑公共配置，保存后影响所有跟随此分组的文件库。' : state.following ? '共享参数已锁定；关闭跟随后可独立修改，并保留当前值。' : '当前使用本库独立配置。' }}</p>
+      <p>
+        {{
+          state.following
+            ? '本库的通用参数由公共配置提供，点击“打开公共配置”查看或修改。'
+            : '下方参数仅保存到当前文件库。'
+        }}
+      </p>
       <p>{{ localHint }}</p>
-      <p v-if="editing">影响的文件库：{{ state.libraries.map(item => item.name).join('、') || '暂无' }}</p>
     </template>
-    <el-button v-else @click="load">重新加载公共配置状态</el-button>
+    <el-button v-else @click="retryLoad">重新加载公共配置状态</el-button>
   </div>
+
+  <el-dialog
+    v-model="dialogOpen"
+    :title="'公共配置 · ' + moduleName"
+    width="min(960px, 94vw)"
+    top="5vh"
+    append-to-body
+    destroy-on-close
+    :close-on-click-modal="false"
+    :close-on-press-escape="!busy"
+    :show-close="!busy"
+    :before-close="closeEditor"
+  >
+    <div v-if="dialogOpen" class="public-editor" v-loading="busy">
+      <el-alert
+        :title="editorRevision === 0 ? '创建公共配置' : '正在编辑公共配置'"
+        type="info"
+        :closable="false"
+        :description="
+          editorRevision === 0
+            ? '以当前库的通用参数为起点。保存后，各库可自行开启跟随。'
+            : '保存后，以下跟随库会使用新参数；独立配置的库不受影响。'
+        "
+      />
+      <div class="affected-libraries">
+        <strong>跟随此配置的文件库（{{ state?.libraries.length || 0 }}）</strong>
+        <div class="library-tags">
+          <el-tag v-for="library in state?.libraries" :key="library.id">{{ library.name }}</el-tag>
+          <span v-if="!state?.libraries.length">暂无，保存不会自动让任何库开启跟随。</span>
+        </div>
+      </div>
+      <div class="public-form-scroll">
+        <el-form label-width="auto" :disabled="busy">
+          <SharedDisplayFields
+            v-if="module === 'display'"
+            :config="draft as unknown as I_config_app"
+          />
+          <SharedImportFields
+            v-else-if="module === 'import'"
+            :config="draft as unknown as I_config_scanDisk"
+          />
+          <SharedScraperFields v-else :config="draft as unknown as I_config_scraperData" />
+        </el-form>
+      </div>
+    </div>
+    <template #footer>
+      <el-button :disabled="busy" @click="closeEditor()">取消</el-button>
+      <el-button type="primary" :loading="busy" @click="savePublic">保存公共配置</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { sharedConfigServer, type SharedModule, type SharedConfigState } from '@/server/sharedConfig.server';
-import { filesBasesServer } from '@/server/filesBases.server';
-import { E_config_type } from '@/dataType/config.dataType';
-import { appStoreData } from '@/storeData/app.storeData';
+import { computed, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  sharedConfigServer,
+  type SharedModule,
+  type SharedConfigState,
+} from '@/server/sharedConfig.server'
+import { filesBasesServer } from '@/server/filesBases.server'
+import {
+  E_config_type,
+  createDefaultConfigApp,
+  defualtConfigScanDisk,
+  defualtConfigScraperData,
+  type I_config_app,
+  type I_config_scanDisk,
+  type I_config_scraperData,
+} from '@/dataType/config.dataType'
+import { appStoreData } from '@/storeData/app.storeData'
+import SharedDisplayFields from './sharedConfig/SharedDisplayFields.vue'
+import SharedImportFields from './sharedConfig/SharedImportFields.vue'
+import SharedScraperFields from './sharedConfig/SharedScraperFields.vue'
 
-const props = defineProps<{ filesBasesId: string; module: SharedModule; config: object; localHint: string }>();
-const emit = defineEmits<{ config: [value: object]; saved: [] }>();
-const state = ref<SharedConfigState>();
-const busy = ref(false);
-const editing = ref(false);
-let original: object | undefined;
-let serial = 0;
+const props = defineProps<{
+  filesBasesId: string
+  module: SharedModule
+  config: object
+  localHint: string
+}>()
+const emit = defineEmits<{ config: [value: object]; saved: [] }>()
+const state = ref<SharedConfigState>()
+const busy = ref(false)
+const dialogOpen = ref(false)
+const draft = ref<Record<string, unknown>>({})
+const editorRevision = ref(0)
+const moduleName = computed(
+  () => ({ display: '基础展示', import: '导入规则', scraper: '刮削参数' })[props.module],
+)
+let serial = 0
+const context = () => props.filesBasesId + ':' + props.module
+const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 
 const load = async () => {
-  const requestSerial = ++serial;
-  state.value = undefined;
-  const result = await sharedConfigServer.status(props.filesBasesId, props.module);
-  if (requestSerial !== serial) return;
-  if (result.status) state.value = result.data;
-  else ElMessage.error(result.msg);
-};
-const fieldDisabled = (key: string) => {
-  if (!state.value || busy.value) return true;
-  const shared = state.value.fields.includes(key);
-  return editing.value ? !shared : state.value.following && shared;
-};
+  const requestSerial = ++serial
+  const result = await sharedConfigServer.status(props.filesBasesId, props.module)
+  if (requestSerial !== serial) return
+  if (!result.status) throw new Error(result.msg)
+  state.value = result.data
+  return result.data
+}
+const retryLoad = () => {
+  void load().catch((error) => ElMessage.error(String(error)))
+}
+const refreshApp = async () => {
+  const app = appStoreData()
+  if (props.module === 'display' && app.currentFilesBases.id === props.filesBasesId)
+    await app.initCurrentFilesBases(props.filesBasesId)
+}
 const reloadConfig = async () => {
-  const result = await filesBasesServer.getConfigById(props.filesBasesId, props.module === 'display' ? E_config_type.app : props.module === 'import' ? E_config_type.importScanDisk : E_config_type.scraper);
-  if (!result.status) throw new Error(result.msg);
-  emit('config', { ...props.config, ...JSON.parse(result.data || '{}') });
-  const app = appStoreData();
-  if (props.module === 'display' && app.currentFilesBases.id === props.filesBasesId) await app.initCurrentFilesBases(props.filesBasesId);
-};
+  const before = context()
+  const result = await filesBasesServer.getConfigById(
+    props.filesBasesId,
+    props.module === 'display'
+      ? E_config_type.app
+      : props.module === 'import'
+        ? E_config_type.importScanDisk
+        : E_config_type.scraper,
+  )
+  if (before !== context()) return
+  if (!result.status) throw new Error(result.msg)
+  emit('config', { ...props.config, ...JSON.parse(result.data || '{}') })
+  await refreshApp()
+}
 const toggleFollow = async (value: string | number | boolean) => {
-  if (!state.value) return;
+  if (!state.value || busy.value) return
+  const before = context()
   try {
-    await ElMessageBox.confirm(value ? '将使用公共配置替换本分组的共享参数。未保存的参数修改将丢弃，本库目录和关联项不受影响。' : '关闭跟随后保留当前生效配置，此后独立修改。', '切换配置来源');
-    busy.value = true;
-    const result = await sharedConfigServer.follow(props.filesBasesId, props.module, !!value, state.value.revision);
-    if (!result.status) throw new Error(result.msg);
-    await reloadConfig();
-    await load();
-    emit('saved');
-  } catch (error) { if (error instanceof Error) ElMessage.error(error.message); }
-  finally { busy.value = false; }
-};
-const editPublic = async () => {
+    await ElMessageBox.confirm(
+      value
+        ? '将使用公共配置替换本分组的通用参数。未保存的参数修改将丢弃，本库目录和关联项不受影响。'
+        : '关闭跟随后保留当前生效配置，此后独立修改。',
+      '切换配置来源',
+    )
+    if (before !== context()) return
+    busy.value = true
+    const result = await sharedConfigServer.follow(
+      props.filesBasesId,
+      props.module,
+      !!value,
+      state.value.revision,
+    )
+    if (!result.status) throw new Error(result.msg)
+    if (before !== context()) return
+    await reloadConfig()
+    await load()
+    emit('saved')
+  } catch (error) {
+    if (error instanceof Error) ElMessage.error(error.message)
+  } finally {
+    busy.value = false
+  }
+}
+const openEditor = async () => {
+  if (busy.value) return
   try {
-    await load();
-    if (!state.value) return;
-    original = JSON.parse(JSON.stringify(props.config));
-    emit('config', { ...props.config, ...state.value.config });
-    editing.value = true;
-  } catch (error) { if (error instanceof Error) ElMessage.error(error.message); }
-};
-const cancelEdit = () => {
-  if (original) emit('config', original);
-  original = undefined;
-  editing.value = false;
-};
+    busy.value = true
+    const latest = await load()
+    if (!latest) return
+    const defaults =
+      props.module === 'display'
+        ? createDefaultConfigApp()
+        : props.module === 'import'
+          ? defualtConfigScanDisk
+          : defualtConfigScraperData
+    const source = {
+      ...clone(defaults),
+      ...clone(latest.available ? latest.config : props.config),
+    } as Record<string, unknown>
+    // 弹窗只持有公共字段的深复制，不能带入或修改本库目录、标签引用及未保存草稿。
+    draft.value = Object.fromEntries(
+      latest.fields.filter((key) => key in source).map((key) => [key, source[key]]),
+    )
+    editorRevision.value = latest.revision
+    dialogOpen.value = true
+  } catch (error) {
+    if (error instanceof Error) ElMessage.error(error.message)
+  } finally {
+    busy.value = false
+  }
+}
+const closeEditor = (done?: () => void) => {
+  if (busy.value) return
+  dialogOpen.value = false
+  draft.value = {}
+  done?.()
+}
 const savePublic = async () => {
-  if (!state.value) return;
+  if (!state.value || !dialogOpen.value || busy.value) return
+  const before = context()
+  const revision = editorRevision.value
+  const payload = clone(draft.value)
   try {
-    const names = state.value.libraries.map(item => item.name).join('、') || '暂无跟随库';
-    await ElMessageBox.confirm(`保存公共配置，影响范围：${names}。本库只有开启跟随才会使用公共配置。`, '保存公共配置');
-    busy.value = true;
-    const result = await sharedConfigServer.save(props.module, state.value.revision, props.config);
-    if (!result.status) throw new Error(result.msg);
-    cancelEdit();
-    await load();
-    if (state.value?.following) await reloadConfig();
-    ElMessage.success('公共配置已保存');
-    emit('saved');
-  } catch (error) { if (error instanceof Error) ElMessage.error(error.message); }
-  finally { busy.value = false; }
-};
-watch(() => [props.filesBasesId, props.module], () => { cancelEdit(); void load(); }, { immediate: true });
-defineExpose({ fieldDisabled, editing, savePublic, state });
+    busy.value = true
+    const latest = await load()
+    if (!latest || before !== context()) return
+    if (latest.revision !== revision)
+      throw new Error('公共配置已被其他页面修改，请关闭弹窗后重新打开。当前草稿仍保留。')
+    const names = latest.libraries.map((item) => item.name).join('、') || '暂无跟随库'
+    await ElMessageBox.confirm(
+      '保存' + moduleName.value + '公共配置，影响范围：' + names + '。',
+      '保存公共配置',
+    )
+    if (before !== context()) return
+    const result = await sharedConfigServer.save(props.module, revision, payload)
+    if (!result.status) throw new Error(result.msg)
+    const saved = await load()
+    if (!saved || before !== context()) return
+    if (saved.following) {
+      // 只更新生效公共值，保留页面中尚未保存的本库独立字段。
+      emit('config', { ...props.config, ...clone(saved.config) })
+      await refreshApp()
+    }
+    dialogOpen.value = false
+    draft.value = {}
+    ElMessage.success('公共配置已保存')
+    emit('saved')
+  } catch (error) {
+    if (error instanceof Error) ElMessage.error(error.message)
+  } finally {
+    busy.value = false
+  }
+}
+watch(
+  () => [props.filesBasesId, props.module],
+  () => {
+    serial++
+    dialogOpen.value = false
+    draft.value = {}
+    state.value = undefined
+    retryLoad()
+  },
+  { immediate: true },
+)
+defineExpose({ dialogOpen, state })
 </script>
 
 <style scoped>
-.shared-config-bar { padding: 12px; margin-bottom: 12px; border: 1px solid var(--el-border-color); border-radius: 6px; }
-.actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-p { margin: 6px 0 0; font-size: 13px; color: var(--el-text-color-secondary); }
+.shared-config-bar {
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+.actions,
+.library-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.affected-libraries {
+  padding: 16px 0;
+}
+.library-tags {
+  margin-top: 8px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.library-tags span {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.public-form-scroll {
+  max-height: clamp(180px, calc(90vh - 290px), 58vh);
+  overflow-y: auto;
+  padding: 0 14px 0 0;
+}
 </style>

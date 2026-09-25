@@ -4,388 +4,76 @@
       <SharedConfigBar ref="sharedBar" :files-bases-id="props.filesBasesId" module="display" :config="filesConfig"
         local-hint="标签与演员选择、路径、自定义头像及封面预设列表保持本库独立。" @config="applySharedConfig" @saved="emit('setSuccess', props.filesBasesId)" />
 
-      <el-alert title="基础设置" type="success" :closable="false" />
-
-      <el-form-item :inert="sharedBar?.fieldDisabled('__local') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('__local') }" label="文件数据库名称">
+      <el-divider content-position="left">本库独立设置</el-divider>
+      <el-form-item label="文件数据库名称">
         <el-input v-model="filesBasesInfo.name" />
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('__local') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('__local') }" label="(主)演员集">
+      <el-form-item label="(主)演员集">
         <el-select v-model="mainPerformerBasesId">
           <el-option v-for="item, index in store.performerBasesStoreData.listByIds(filesBasesRelatedPerformerBases)"
             :key="index" :label="item.name" :value="item.id"></el-option>
         </el-select>
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('__local') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('__local') }" label="关联演员集">
+      <el-form-item label="关联演员集">
         <el-checkbox-group v-model="filesBasesRelatedPerformerBases">
           <el-checkbox v-for="item, key in store.performerBasesStoreData.performerBases" :key="key" :label="item.name"
             :value="item.id" :disabled="item.id == mainPerformerBasesId" />
         </el-checkbox-group>
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('__local') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('__local') }" label="状态">
+      <el-form-item label="状态">
         <el-switch v-model="filesBasesInfo.status" inline-prompt active-text="启用" inactive-text="禁用" />
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('country') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('country') }" label="国家列表">
-        <selectCountry v-model="filesConfig.country" multiple />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('definition') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('definition') }" label="清晰度">
-        <selectDefinition v-model="filesConfig.definition" multiple />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourceSort') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourceSort') }" label="资源排序">
-        <selectResourceSort v-model="filesConfig.resourceSort" multiple />
-      </el-form-item>
 
-      <el-alert title="左侧边栏" type="success" :closable="false" />
-
-      <el-form-item :inert="sharedBar?.fieldDisabled('leftDisplay') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('leftDisplay') }" label="左侧边栏显示项">
-        <selectLeftDisplay v-model="filesConfig.leftDisplay" multiple />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('leftColumnMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('leftColumnMode') }" label="左侧边栏显示模式">
-        <selectLeftColumnMode v-model="filesConfig.leftColumnMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('leftColumnWidth') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('leftColumnWidth') }" label="左侧边栏宽度">
-        <el-input-number v-model="filesConfig.leftColumnWidth" :min="100" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('leftColumnFloatAutoHide') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('leftColumnFloatAutoHide') }" label="浮动模式自动隐藏">
-        <el-checkbox v-model="filesConfig.leftColumnFloatAutoHide" label="点击非左侧栏位置后自动隐藏" border />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('tagMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('tagMode') }" label="标签显示模式">
-        <selectTagMode v-model="filesConfig.tagMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('tagFixedModeRowShowNum') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('tagFixedModeRowShowNum') }" label="固定模式每行显示标签数量">
-        <el-input-number v-model="filesConfig.tagFixedModeRowShowNum" :min="1" :max="99" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('showCustomTagResourceCount') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('showCustomTagResourceCount') }" label="自定义标签资源数量">
-        <el-switch v-model="filesConfig.showCustomTagResourceCount" inline-prompt active-text="显示" inactive-text="隐藏" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('performerPhoto') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('performerPhoto') }" label="演员标签">
-        <el-checkbox v-model="filesConfig.performerPhoto" label="显示演员照片" border />
-        <el-checkbox v-model="filesConfig.shieldNoPerformerPhoto" label="屏蔽无照片演员" border />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('performerShowNum') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('performerShowNum') }" label="演员标签显示数量">
-        <el-input-number v-model="filesConfig.performerShowNum" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('performerPreferred') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('performerPreferred') }" label="优先显示演员">
+      <el-form-item label="优先显示演员">
         <selectPerformer ref="selectPerformerRef" v-model="filesConfig.performerPreferred" multiple
           :careerType="E_performerCareerType.Performer"
           :performer-bases-ids="[store.filesBasesStoreData.getMainPerformerBasesIdByFilesBasesId(filesBasesInfo.id)]" />
       </el-form-item>
 
-      <el-alert title="显示设置" type="success" :closable="false" />
-
-      <el-form-item :inert="sharedBar?.fieldDisabled('pageLimit') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('pageLimit') }" label="分页显示数量">
-        <el-input-number v-model="filesConfig.pageLimit" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourcesShowMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourcesShowMode') }" label="资源显示模式">
-        <selectResourcesMode v-model="filesConfig.resourcesShowMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('showVideoDuration') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('showVideoDuration') }" label="显示视频时长">
-        <el-switch v-model="filesConfig.showVideoDuration" inline-prompt active-text="显示" inactive-text="关闭" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourcesShowMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourcesShowMode') }" v-if="filesConfig.resourcesShowMode == 'coverPosterBox'" label="封面海报盒子-信息宽度">
-        <el-input-number v-model="filesConfig.coverPosterBoxInfoWidth" :min="20" :max="9999" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourcesShowMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourcesShowMode') }" v-if="filesConfig.resourcesShowMode == 'coverPosterWaterfall'" label="封面海报瀑布流-列数">
-        <el-input-number v-model="filesConfig.coverPosterWaterfallColumn" :min="1" :max="20" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverTitleAlign') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverTitleAlign') }" label="封面标题对齐方式">
-        <el-select v-model="filesConfig.coverTitleAlign">
-          <el-option label="左对齐" value="left" />
-          <el-option label="居中" value="center" />
-          <el-option label="右对齐" value="right" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourceJustifyContent') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourceJustifyContent') }" label="资源对齐方式">
-        <el-select v-model="filesConfig.resourceJustifyContent">
-          <el-option label="start" value="flex-start" />
-          <el-option label="center " value="center" />
-          <el-option label="end" value="flex-end" />
-          <el-option label="between" value="space-between" />
-          <el-option label="around" value="space-around" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('detailsDramaSeriesMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('detailsDramaSeriesMode') }" label="详情剧集显示模式">
-        <selectDetailsDramaSeriesMode v-model="filesConfig.detailsDramaSeriesMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('resourceDetailsShowMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourceDetailsShowMode') }" label="详情显示模式">
-        <selectResourceDetailsShowMode v-model="filesConfig.resourceDetailsShowMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('detailsVisibleFields') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('detailsVisibleFields') }" label="详情信息显示项">
-        <el-checkbox-group v-model="filesConfig.detailsVisibleFields">
-          <el-checkbox label="副标题" value="subtitle" />
-          <el-checkbox label="版号" value="issueNumber" />
-          <el-checkbox label="国家" value="country" />
-          <el-checkbox label="年份" value="issuingDate" />
-          <el-checkbox label="收录时间" value="addTime" />
-          <el-checkbox label="清晰度" value="definition" />
-          <el-checkbox label="评分" value="score" />
-          <el-checkbox label="评星" value="stars" />
-        </el-checkbox-group>
-      </el-form-item>
-      <!--
-      <el-form-item :inert="sharedBar?.fieldDisabled('showPreviewImage') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('showPreviewImage') }" label="预览图">
-        <el-checkbox v-model="filesConfig.showPreviewImage" label="显示预览图" border />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('previewImageFolder') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('previewImageFolder') }" label="预览图文件夹，多个文件夹用,分割">
-        <el-input v-model="filesConfig.previewImageFolder" />
-      </el-form-item>
-      -->
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverDisplayTagAttribute') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverDisplayTagAttribute') }" label="封面上显示标签(属性)">
-        <el-select v-model="filesConfig.coverDisplayTagAttribute" multiple>
-          <el-option :label="appLang.attributeTags('definition')" value="definition" />
-          <el-option :label="appLang.attributeTags('year')" value="issuingDate" />
-          <el-option :label="appLang.attributeTags('country')" value="country" />
-          <el-option :label="appLang.attributeTags('starRating')" value="stars" />
-          <el-option :label="appLang.attributeTags('score')" value="score" />
-          <el-option :label="appLang.attributeTags('hot')" value="hot" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverDisplayTag') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverDisplayTag') }" label="封面上显示标签(自定义)">
+      <el-form-item label="封面上显示标签(自定义)">
         <selectTag ref="selectTagRef" v-model="filesConfig.coverDisplayTag" data-source="database"
           :filesBasesId="props.filesBasesId" multiple reorder />
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverDisplayTagRgbas') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverDisplayTagRgbas') }" label="标签背景色">
-        <div class="color-picker-block">
-          <div v-for="_, index in filesConfig.coverDisplayTagRgbas" :key="index">
-            <el-color-picker v-model="filesConfig.coverDisplayTagRgbas[index]" show-alpha />
-          </div>
-          <el-button-group class="color-picker-btn" size="small">
-            <el-button icon="Plus" @click="filesConfig.coverDisplayTagRgbas.push(getRandomColor())" />
-            <el-button icon="Minus" @click="filesConfig.coverDisplayTagRgbas.pop()" />
-          </el-button-group>
-        </div>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverDisplayTagColors') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverDisplayTagColors') }" label="标签字体颜色">
-        <div class="color-picker-block">
-          <div v-for="_, index in filesConfig.coverDisplayTagColors" :key="index">
-            <el-color-picker v-model="filesConfig.coverDisplayTagColors[index]" show-alpha />
-          </div>
-          <el-button-group class="color-picker-btn" size="small">
-            <el-button icon="Plus" @click="filesConfig.coverDisplayTagColors.push(getRandomColor())" />
-            <el-button icon="Minus" @click="filesConfig.coverDisplayTagColors.pop()" />
-          </el-button-group>
-        </div>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverDisplayTagFontSize') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverDisplayTagFontSize') }" label="标签字体大小">
-        <el-input-number v-model="filesConfig.coverDisplayTagFontSize" :min="8" :max="24" />
-      </el-form-item>
 
-      <el-form-item :inert="sharedBar?.fieldDisabled('casualViewModule') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('casualViewModule') }" label="开启显示模块">
-        <div class="module-block-group">
-          <div class="module-block">
-            <el-checkbox class="module-block-checkbox" v-model="filesConfig.casualViewModule" label="随便看看" border />
-            <div class="module-block-value-k">
-              <label class="module-block-label">显示数量</label>
-              <el-input-number v-model="filesConfig.casualViewNumber" />
-            </div>
-          </div>
-          <div class="module-block">
-            <el-checkbox class="module-block-checkbox" v-model="filesConfig.historyModule" label="历史记录" border />
-            <div class="module-block-value-k">
-              <label>显示数量</label>
-              <el-input-number v-model="filesConfig.historyNumber" />
-            </div>
-          </div>
-          <div class="module-block">
-            <el-checkbox class="module-block-checkbox" v-model="filesConfig.hotModule" label="热门资源" border />
-            <div class="module-block-value-k">
-              <label>显示数量</label>
-              <el-input-number v-model="filesConfig.hotNumber" />
-            </div>
-          </div>
-        </div>
-      </el-form-item>
-
-      <el-alert title="剧照设置" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('sampleStatus') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('sampleStatus') }" label="显示剧照">
-        <el-switch v-model="filesConfig.sampleStatus" inline-prompt active-text="显示" inactive-text="关闭" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('sampleShowMax') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('sampleShowMax') }" label="剧照最大显示数量">
-        <el-input-number v-model="filesConfig.sampleShowMax" :min="1" :max="100" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('sampleFolder') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('sampleFolder') }" label="剧照相对文件夹">
+      <el-form-item label="剧照相对文件夹">
         <el-input v-model="filesConfig.sampleFolder" />
       </el-form-item>
-      <!--
-      <el-form-item :inert="sharedBar?.fieldDisabled('randomPosterStatus') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('randomPosterStatus') }" label="随机海报">
-        <el-checkbox v-model="filesConfig.randomPosterStatus" label="开启随机海报" border />
-        <el-checkbox v-model="filesConfig.randomPosterAutoSize" label="随机海报自适应宽高" border />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('randomPosterWidth') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('randomPosterWidth') }" label="随机海报宽度">
-        <el-input-number v-model="filesConfig.randomPosterWidth" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('randomPosterHeight') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('randomPosterHeight') }" label="随机海报高度">
-        <el-input-number v-model="filesConfig.randomPosterHeight" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('randomPosterPath') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('randomPosterPath') }" label="随机海报路径">
-        <el-input v-model="filesConfig.randomPosterPath" placeholder="随机海报文件夹所在路径" />
-      </el-form-item>
-      -->
-      <el-alert title="参数设置" type="success" :closable="false" />
 
-      <el-form-item :inert="sharedBar?.fieldDisabled('openResModeMovies') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('openResModeMovies') }" label="视频 - 打开方式">
-        <el-select v-model="filesConfig.openResModeMovies">
-          <el-option label="内置" :value="E_resourceOpenMode.Soft" />
-          <el-option label="云播" :value="E_resourceOpenMode.CloundPlay" />
-          <el-option label="系统" :value="E_resourceOpenMode.System" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('openResModeMovies') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('openResModeMovies') }" label="内置播放器" v-if="filesConfig.openResModeMovies === E_resourceOpenMode.Soft">
-        <el-select v-model="filesConfig.openResModeMovies_SoftType">
-          <el-option label="窗口模式" :value="E_resourceOpenMode_SoftType.Windows" />
-          <el-option label="弹窗模式" :value="E_resourceOpenMode_SoftType.Dialog" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('openResModeComic') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('openResModeComic') }" label="漫画 - 打开方式">
-        <el-select v-model="filesConfig.openResModeComic">
-          <el-option label="内置" :value="E_resourceOpenMode.Soft" />
-          <el-option label="系统" :value="E_resourceOpenMode.System" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('openResModeAtlas') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('openResModeAtlas') }" label="图集 - 打开方式">
-        <el-select v-model="filesConfig.openResModeAtlas">
-          <el-option label="内置" :value="E_resourceOpenMode.Soft" />
-          <el-option label="系统" :value="E_resourceOpenMode.System" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('videoPreviewImageCount') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('videoPreviewImageCount') }" label="获取视频预览图关键帧数量">
-        <el-input-number v-model="filesConfig.videoPreviewImageCount" :min="1" :max="200" />
-      </el-form-item>
-      <!--
-      <el-form-item :inert="sharedBar?.fieldDisabled('historyModule') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('historyModule') }" label="开启记录模块">
-        <el-checkbox v-model="filesConfig.historyModule" label="历史记录" border />
-        <el-checkbox v-model="filesConfig.hotModule" label="当前热度" border />
-        <el-checkbox v-model="filesConfig.youLikeModule" label="猜你喜欢" border />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('historyNumber') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('historyNumber') }" label="历史记录显示数量">
-        <el-input-number v-model="filesConfig.historyNumber" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('hotNumber') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('hotNumber') }" label="当前热度显示数量">
-        <el-input-number v-model="filesConfig.hotNumber" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('youLikeNumber') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('youLikeNumber') }" label="猜你喜欢显示数量">
-        <el-input-number v-model="filesConfig.youLikeNumber" />
-      </el-form-item>
-
-      <el-form-item :inert="sharedBar?.fieldDisabled('youLikeWordNumber') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('youLikeWordNumber') }" label="猜你喜欢取词量">
-        <el-input-number v-model="filesConfig.youLikeWordNumber" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('youLikeTagClass') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('youLikeTagClass') }" label="猜你喜欢参与取词的标签分类">
-        <selectTagClass v-model="filesConfig.youLikeTagClass" :filesBasesId="props.filesBasesId" multiple />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('__local') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('__local') }" label="当前猜你喜欢词汇">
-        <el-tag type="primary">Tag 1</el-tag>
-        <el-tag type="primary">Tag 2</el-tag>
-        <el-tag type="primary">Tag 3</el-tag>
-      </el-form-item>
-      -->
-
-      <!--
-      <el-alert title="图集设置" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('playAtlasMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('playAtlasMode') }" label="图集显示模式">
-        <selectPlayAtlasMode v-model="filesConfig.playAtlasMode" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('playAtlasPageLimit') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('playAtlasPageLimit') }" label="图集分批读取数量">
-        <el-input-number v-model="filesConfig.playAtlasPageLimit" :min="10" :max="1000" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('playAtlasThumbnail') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('playAtlasThumbnail') }" label="图集缩略图">
-        <el-checkbox v-model="filesConfig.playAtlasThumbnail" label="图集缩略图" border />
-      </el-form-item>
-      -->
-
-      <el-alert title="演员&导演自定义" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('performer_Text') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('performer_Text') }" label="演员显示文字">
-        <el-input v-model="filesConfig.performer_Text" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('director_Text') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('director_Text') }" label="导演显示文字">
-        <el-input v-model="filesConfig.director_Text" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('performer_photo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('performer_photo') }" label="自定义头像">
+      <el-form-item label="自定义头像">
         <setCustomAvatar v-model="filesConfig.performer_photo" />
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('showPerformerResourceCount') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('showPerformerResourceCount') }" label="资源数量角标">
-        <el-checkbox v-model="filesConfig.showPerformerResourceCount" label="显示演员关联资源数量" border />
-      </el-form-item>
 
-      <el-alert title="插件设置" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('plugInUnit_Cup') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('plugInUnit_Cup') }" label="Cup插件">
-        <el-checkbox v-model="filesConfig.plugInUnit_Cup" label="开启演员Cup插件" border />
-        <alert-msg color="warning">
-          该插件在演员资料中添加Cup选项，并在左边栏出现Cup标签选择。
-        </alert-msg>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('plugInUnit_Cup_Text') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('plugInUnit_Cup_Text') }" label="Cup显示文字">
-        <el-input v-model="filesConfig.plugInUnit_Cup_Text" />
-      </el-form-item>
-
-      <el-alert title="封面海报设置" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterDataDefaultSelect') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterDataDefaultSelect') }" label="封面海报">
+      <el-form-item label="封面海报">
         <coverPosterAdmin v-model:cover-poster-data-default-select="filesConfig.coverPosterDataDefaultSelect"
           v-model:cover-poster-data="filesConfig.coverPosterData" />
       </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterWidthStatus') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterWidthStatus') }" label="封面海报显示宽度">
-        <el-checkbox v-model="filesConfig.coverPosterWidthStatus" label="开启封面海报宽度控制" border />
-        <alert-msg color="warning">
-          开启该功能，会限定每个资源封面海报的宽度。
-        </alert-msg>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterWidthBase') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterWidthBase') }" label="宽度基数">
-        <el-input-number v-model="filesConfig.coverPosterWidthBase" />
-      </el-form-item>
 
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterHeightStatus') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterHeightStatus') }" label="封面海报显示高度">
-        <el-checkbox v-model="filesConfig.coverPosterHeightStatus" label="开启封面海报高度控制" border />
-        <alert-msg color="warning">
-          开启该功能，会限定每个资源封面海报的高度。
-        </alert-msg>
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterHeightBase') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterHeightBase') }" label="高度基数">
-        <el-input-number v-model="filesConfig.coverPosterHeightBase" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterGap') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterGap') }" label="资源间距">
-        <el-input-number v-model="filesConfig.coverPosterGap" :precision="1" :min="0" :max="50" :step="0.1" />
-      </el-form-item>
-      <el-form-item :inert="sharedBar?.fieldDisabled('contentPadding') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('contentPadding') }" label="左右空距">
-        <el-input-number v-model="filesConfig.contentPadding" :min="0" :max="50" />
-      </el-form-item>
-      <!--
-      <el-alert title="路径虚拟转换" type="success" :closable="false" />
-      <el-form-item :inert="sharedBar?.fieldDisabled('routeConversion') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('routeConversion') }" label="转换配置">
-        <routeConversionAdmin v-model:route-conversion="filesConfig.routeConversion"></routeConversionAdmin>
-      </el-form-item>
-      -->
-
-
+      <template v-if="!sharedBar?.state?.following">
+        <el-divider content-position="left">本库展示参数</el-divider>
+        <SharedDisplayFields :config="filesConfig" />
+      </template>
     </el-form>
-    <!-- 保存按钮 -->
+
     <div class="save-button-container">
       <el-button-group>
-        <el-button :disabled="sharedBar?.state?.following || sharedBar?.editing" @click="importHandle">导入</el-button>
+        <el-button :disabled="sharedBar?.state?.following || sharedBar?.dialogOpen" @click="importHandle">导入</el-button>
         <el-button @click="exportHandle">导出</el-button>
       </el-button-group>
-      <el-button type="primary" @click="saveHandle" icon="Edit">保存</el-button>
+      <el-button type="primary" @click="saveHandle" :disabled="sharedBar?.dialogOpen" icon="Edit">保存本库设置</el-button>
     </div>
   </div>
 </template>
 <script lang="ts" setup>
 import { onMounted, ref } from 'vue';
 import SharedConfigBar from '@/components/setting/SharedConfigBar.vue';
-import { E_performerCareerType, E_resourceOpenMode, E_resourceOpenMode_SoftType } from '@/dataType/app.dataType';
-import selectCountry from '@/components/com/form/selectCountry.vue';
-import selectDefinition from '@/components/com/form/selectDefinition.vue';
-import selectResourceSort from '@/components/com/form/selectResourceSort.vue';
-import selectLeftDisplay from '@/components/com/form/selectLeftDisplay.vue';
-import selectLeftColumnMode from '@/components/com/form/selectLeftColumnMode.vue';
-import selectTagMode from '@/components/com/form/selectTagMode.vue';
+import SharedDisplayFields from '@/components/setting/sharedConfig/SharedDisplayFields.vue';
+import { E_performerCareerType } from '@/dataType/app.dataType';
 import selectPerformer from '@/components/com/form/selectPerformer.vue';
-import selectResourcesMode from '@/components/com/form/selectResourcesMode.vue';
-import selectDetailsDramaSeriesMode from '@/components/com/form/selectDetailsDramaSeriesMode.vue';
-import selectResourceDetailsShowMode from '@/components/com/form/selectResourceDetailsShowMode.vue';
 import selectTag from '@/components/com/form/selectTag.vue';
 //import selectPlayAtlasMode from '@/components/com/form/selectPlayAtlasMode.vue';
 import coverPosterAdmin from './coverPosterAdmin.vue';
 //import routeConversionAdmin from './routeConversionAdmin.vue';
 import setCustomAvatar from '@/components/com/form/setCustomAvatar.vue';
-import alertMsg from '@/components/com/feedback/alertMsg.vue';
 import { filesBasesServer } from '@/server/filesBases.server';
 import { ElMessage } from 'element-plus';
 import type { I_filesBases_base } from '@/dataType/filesBases.dataType';
@@ -393,11 +81,7 @@ import { createDefaultConfigApp, defualtConfigApp, type I_config_app } from '@/d
 import { filesBasesStoreData } from '@/storeData/filesBases.storeData';
 import { performerBasesStoreData } from '@/storeData/performerBases.storeData';
 import { debounceNow } from '@/assets/debounce';
-import { getRandomColor } from '@/assets/tool';
-import { AppLang } from '@/language/app.lang'
 import { filesBasesConfigExport, filesBasesConfigImport } from '@/common/filesBasesConfig';
-const appLang = AppLang()
-
 
 const store = {
   filesBasesStoreData: filesBasesStoreData(),
@@ -422,7 +106,6 @@ const filesBasesInfo = ref<I_filesBases_base>({} as I_filesBases_base);
 const mainPerformerBasesId = ref('');
 const filesBasesRelatedPerformerBases = ref<string[]>([]);
 const filesConfig = ref<I_config_app>({} as I_config_app);
-
 
 const init = async () => {
   await getFielsBasesInfo();
@@ -483,7 +166,7 @@ const getFielsBasesInfo = async () => {
 }
 
 const saveHandle = debounceNow(async () => {
-  if (sharedBar.value?.editing) { await sharedBar.value.savePublic(); return; }
+  if (sharedBar.value?.dialogOpen) return;
   if (!filesBasesRelatedPerformerBases.value.includes(mainPerformerBasesId.value)) {
     ElMessage.error('请设置主演员集');
     return;
@@ -550,7 +233,6 @@ onMounted(() => {
 
 </script>
 <style lang="scss" scoped>
-.shared-locked { opacity: 0.55; }
 .setting-data {
   max-width: 960px;
   height: 100%;
@@ -570,39 +252,6 @@ onMounted(() => {
 
     .alert-msg {
       padding: 0 10px;
-    }
-  }
-
-  .color-picker-block {
-    display: flex;
-    gap: 6px;
-
-    .color-picker-btn {
-      display: flex;
-      align-items: center;
-    }
-  }
-
-  .module-block-group {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-
-    .module-block {
-      display: flex;
-      gap: 10px;
-
-      .module-block-checkbox {
-        width: 120px;
-      }
-
-      .module-block-value-k {
-        display: flex;
-        gap: 5px;
-        align-items: center;
-      }
-
     }
   }
 
