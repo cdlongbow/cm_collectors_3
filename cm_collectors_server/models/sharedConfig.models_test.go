@@ -141,3 +141,132 @@ func TestSharedConfigLegacyAndFailedTransactions(t *testing.T) {
 		t.Fatal("independent legacy save rejected", err)
 	}
 }
+
+func importTestConfig() string {
+	return `{"videoSuffixName":["mp4"],"autoGetVideoDefinition":true,"resourceNamingMode":"fileName","importMode":"append","coverPosterMatchName":["poster"],"coverPosterFuzzyMatch":true,"coverPosterUseRandomImageIfNoMatch":false,"coverPosterSuffixName":["jpg"],"autoCreatePoster":true,"folderToSeries":false,"similarNameToSeries":true,"folderToSeriesSortMode":"nameAsc","enableNfoFuzzyMatch":true,"useRandomNfoIfNoneMatch":false,"nfo":{"nfoStatus":true,"roots":["movie"],"titles":["title"],"issueNumbers":[],"issuingDates":[],"score":[],"abstracts":[],"tags":["genre"],"tagAutoCreate":false,"performerNames":[],"performerMatchAliasName":false,"performerAutoCreate":false,"performerThumbs":[]},"scanDiskPaths":["source-library"],"coverPosterType":5,"coverPosterWidth":999}`
+}
+
+func scraperTestConfig(timeout int) string {
+	value := map[string]interface{}{"videoSuffixName": []string{"mp4"}, "scraperConfigs": []string{"example"}, "concurrency": 3, "retryCount": 3, "timeout": timeout, "skipIfNfoExists": true, "saveNfo": true, "enableDownloadImages": true, "useTagAsImageName": true, "enableUserSimulation": false, "scanDiskPaths": []string{"source-library"}}
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
+func TestSharedTaskModulesKeepPathsAndSnapshots(t *testing.T) {
+	db := sharedTestDB(t)
+	if err := db.Model(&FilesBasesSetting{}).Where("filesBases_id = ?", "A").Updates(map[string]interface{}{
+		"scan_disk_json_data": `{"scanDiskPaths":["A-import"],"coverPosterType":2,"coverPosterWidth":400,"legacyLocal":true}`,
+		"scraper_json_data":   `{"scanDiskPaths":["A-scrape"]}`,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSharedConfig(db, "import", 0, importTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSharedConfig(db, "scraper", 0, scraperTestConfig(30)); err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range []string{"import", "scraper"} {
+		if err := db.Transaction(func(tx *gorm.DB) error { return SetLibraryConfigFollow(tx, "A", module, true, 1) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var local FilesBasesSetting
+	db.Where("filesBases_id = ?", "A").Take(&local)
+	importRaw, err := EffectiveLibraryConfig(db, "A", "import", local.ScanDiskJsonData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var importConfig datatype.Config_ScanDisk
+	if err := json.Unmarshal([]byte(importRaw), &importConfig); err != nil {
+		t.Fatal(err)
+	}
+	if importConfig.ScanDiskPaths[0] != "A-import" || importConfig.CoverPosterType != 2 || importConfig.CoverPosterWidth != 400 {
+		t.Fatal("import copied another library's local fields")
+	}
+	encoded, _ := json.Marshal(importConfig)
+	if err := GuardSharedConfigWrite(db, "A", "import", string(encoded)); err != nil {
+		t.Fatal("normal import execution save rejected", err)
+	}
+	scraperRaw, err := EffectiveLibraryConfig(db, "A", "scraper", local.ScraperJsonData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot datatype.Config_Scraper
+	if err := json.Unmarshal([]byte(scraperRaw), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ = json.Marshal(snapshot)
+	if err := GuardSharedConfigWrite(db, "A", "scraper", string(encoded)); err != nil {
+		t.Fatal("scraper save lost concurrency", err)
+	}
+	if snapshot.ScanDiskPaths[0] != "A-scrape" || snapshot.Concurrency != 3 {
+		t.Fatal("scraper local values changed")
+	}
+	if err := SaveSharedConfig(db, "scraper", 1, scraperTestConfig(90)); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Timeout != 30 {
+		t.Fatal("running task snapshot changed")
+	}
+	if err := GuardSharedConfigWrite(db, "A", "scraper", string(encoded)); err == nil {
+		t.Fatal("stale execution setup should request reload")
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return SetLibraryConfigFollow(tx, "A", "scraper", false, 2) }); err != nil {
+		t.Fatal(err)
+	}
+	db.Where("filesBases_id = ?", "A").Take(&local)
+	var detached datatype.Config_Scraper
+	json.Unmarshal([]byte(local.ScraperJsonData), &detached)
+	if detached.Timeout != 90 || detached.ScanDiskPaths[0] != "A-scrape" {
+		t.Fatal("detach did not retain task parameters and paths")
+	}
+	state, _ := SharedConfigStatus(db, "A", "import")
+	if !state.Following {
+		t.Fatal("detaching scraper also detached import")
+	}
+	state, _ = SharedConfigStatus(db, "A", "display")
+	if state.Following {
+		t.Fatal("task following changed display following")
+	}
+	if err := SaveSharedConfig(db, "scraper", 2, scraperTestConfig(0)); err == nil {
+		t.Fatal("invalid timeout accepted")
+	}
+}
+
+func TestSharedNewLibraryImportDoesNotChooseFirstPosterPreset(t *testing.T) {
+	db := sharedTestDB(t)
+	if err := SaveSharedConfig(db, "import", 0, importTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return SetLibraryConfigFollow(tx, "C", "import", true, 1) }); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := EffectiveLibraryConfig(db, "C", "import", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := parseConfig(raw)
+	if value["coverPosterType"] != float64(-1) {
+		t.Fatal("new following library unexpectedly selected a local preset")
+	}
+	if _, ok := value["scanDiskPaths"]; ok {
+		t.Fatal("source paths leaked into new library")
+	}
+}
+
+func TestBrokenPublicConfigDoesNotBlockIndependentLibrary(t *testing.T) {
+	db := sharedTestDB(t)
+	if err := db.Create(&SharedLibraryConfig{Module: "display", Revision: 1, Config: "broken"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := GuardSharedConfigWrite(db, "A", "display", `{"pageLimit":32}`); err != nil {
+		t.Fatal("independent save depends on broken public config", err)
+	}
+	if err := db.Create(&LibraryConfigFollow{FilesBasesID: "B", Module: "display"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := GuardSharedConfigWrite(db, "B", "display", `{"pageLimit":32}`); err == nil {
+		t.Fatal("broken public config silently accepted")
+	}
+}

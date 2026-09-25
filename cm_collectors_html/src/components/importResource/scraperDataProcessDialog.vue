@@ -37,16 +37,12 @@ import type { I_config_scraperData } from '@/dataType/config.dataType';
 import { debounceNow } from '@/assets/debounce';
 import { ElMessageBox, ElTable } from 'element-plus';
 import { scraperDataServer } from '@/server/scraper.server';
-import { appStoreData } from '@/storeData/app.storeData';
 
 interface I_pathList {
   path: string;
   status: boolean;
   msg: string;
   importing?: boolean; //  importing 标记
-}
-const store = {
-  appStoreData: appStoreData(),
 }
 
 
@@ -56,7 +52,10 @@ const tableRef = ref<InstanceType<typeof ElTable>>();
 const pathList = ref<I_pathList[]>([]);
 let config: I_config_scraperData;
 let workStatus = true;
-const init = (_pathList: string[], _config: I_config_scraperData) => {
+let taskFilesBasesId = '';
+let taskGeneration = 0;
+const init = (_pathList: string[], _config: I_config_scraperData, filesBasesId: string) => {
+  taskGeneration++;
   workStatus = true;
   dialogCommonRef.value?.disabledSubmit(false);
   pathList.value = [];
@@ -68,9 +67,13 @@ const init = (_pathList: string[], _config: I_config_scraperData) => {
       importing: false, // 初始化 importing
     });
   });
-  config = _config;
+  config = JSON.parse(JSON.stringify(_config));
+  taskFilesBasesId = filesBasesId;
 }
 const submitHandle = debounceNow(async () => {
+  const generation = taskGeneration;
+  const taskConfig = config;
+  const taskLibraryId = taskFilesBasesId;
   dialogCommonRef.value?.disabledSubmit(true);
 
   // 获取选中的行
@@ -88,7 +91,7 @@ const submitHandle = debounceNow(async () => {
   });
 
   // 使用信号量控制并发数
-  const concurrency = config.concurrency || 3; // 默认并发数为3
+  const concurrency = taskConfig.concurrency || 3; // 默认并发数为3
   let index = 0;
 
 
@@ -100,7 +103,7 @@ const submitHandle = debounceNow(async () => {
 
   const processItem = async () => {
     const currentIndex = index++;
-    if (currentIndex >= total || !workStatus) {
+    if (currentIndex >= total || !workStatus || generation !== taskGeneration) {
       return;
     }
 
@@ -111,11 +114,12 @@ const submitHandle = debounceNow(async () => {
     const delay = Math.random() * 2000;
     await new Promise(resolve => setTimeout(resolve, delay));
 
+    if (!workStatus || generation !== taskGeneration) return;
     try {
       const result = await scraperDataServer.scraperDataProcess(
-        store.appStoreData.currentFilesBases.id,
+        taskLibraryId,
         item.path,
-        config
+        taskConfig
       );
 
       if (!result.status) {
@@ -139,9 +143,10 @@ const submitHandle = debounceNow(async () => {
   const promises = Array(Math.min(concurrency, total)).fill(null).map(() => processItem());
   await Promise.all(promises);
 
-  success();
+  if (generation === taskGeneration) success();
 })
 const closeHandle = () => {
+  taskGeneration++;
   workStatus = false;
 }
 const success = () => {
@@ -150,8 +155,8 @@ const success = () => {
   })
 }
 
-const open = (_pathList: string[], _config: I_config_scraperData) => {
-  init(_pathList, _config)
+const open = (_pathList: string[], _config: I_config_scraperData, filesBasesId: string) => {
+  init(_pathList, _config, filesBasesId)
   dialogCommonRef.value?.open();
 
   // 默认全选：在对话框打开后，确保表格渲染完成再执行全选

@@ -24,6 +24,16 @@ func (FilesBasesSetting) InfoByFilesBasesID(db *gorm.DB, filesBasesID string) (*
 
 func (FilesBasesSetting) Update(db *gorm.DB, filesBasesID string, filesBasesSetting *FilesBasesSetting, fields []string) error {
 	for _, field := range fields {
+		if field == "scan_disk_json_data" {
+			if err := GuardSharedConfigWrite(db, filesBasesID, "import", filesBasesSetting.ScanDiskJsonData); err != nil {
+				return err
+			}
+		}
+		if field == "scraper_json_data" {
+			if err := GuardSharedConfigWrite(db, filesBasesID, "scraper", filesBasesSetting.ScraperJsonData); err != nil {
+				return err
+			}
+		}
 		if field == "config_json_data" {
 			if err := GuardSharedConfigWrite(db, filesBasesID, "display", filesBasesSetting.ConfigJsonData); err != nil {
 				return err

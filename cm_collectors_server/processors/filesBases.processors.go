@@ -89,13 +89,13 @@ func (t FilesBases) ConfigById(id, configType string) (string, error) {
 	case "filesBases":
 		return models.EffectiveLibraryConfig(core.DBS(), id, "display", filesBasesSettingInfo.ConfigJsonData)
 	case "importScanDisk":
-		return filesBasesSettingInfo.ScanDiskJsonData, nil
+		return models.EffectiveLibraryConfig(core.DBS(), id, "import", filesBasesSettingInfo.ScanDiskJsonData)
 	case "importNfo":
 		return filesBasesSettingInfo.NfoJsonData, nil
 	case "importSimple":
 		return filesBasesSettingInfo.SimpleJsonData, nil
 	case "scraper":
-		return filesBasesSettingInfo.ScraperJsonData, nil
+		return models.EffectiveLibraryConfig(core.DBS(), id, "scraper", filesBasesSettingInfo.ScraperJsonData)
 	case "scraperPerformer":
 		return filesBasesSettingInfo.ScraperPerformerJsonData, nil
 	default:
@@ -363,7 +363,7 @@ func (t FilesBases) Create(name, mainPerformerBasesId string, relatedPerformerBa
 			if err != nil {
 				return err
 			}
-			if err := models.SetLibraryConfigFollow(tx, id, module, true, state.Revision); err != nil {
+			if err := FollowSharedLibraryConfig(tx, id, module, true, state.Revision); err != nil {
 				return err
 			}
 		}

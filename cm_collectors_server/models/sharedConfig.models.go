@@ -52,6 +52,15 @@ func SharedConfigFields(module string) []string {
 		 plugInUnit_Cup plugInUnit_Cup_Text coverPosterWidthStatus coverPosterWidthBase coverPosterHeightStatus
 		 coverPosterHeightBase coverPosterGap contentPadding`)
 	}
+	if module == "import" {
+		return strings.Fields(`videoSuffixName autoGetVideoDefinition resourceNamingMode importMode coverPosterMatchName
+          coverPosterFuzzyMatch coverPosterUseRandomImageIfNoMatch coverPosterSuffixName autoCreatePoster folderToSeries
+          similarNameToSeries folderToSeriesSortMode enableNfoFuzzyMatch useRandomNfoIfNoneMatch nfo`)
+	}
+	if module == "scraper" {
+		return strings.Fields(`videoSuffixName scraperConfigs concurrency retryCount timeout skipIfNfoExists saveNfo
+          enableDownloadImages useTagAsImageName enableUserSimulation`)
+	}
 	return nil
 }
 
@@ -59,6 +68,10 @@ func sharedConfigColumn(module string) string {
 	switch module {
 	case "display":
 		return "config_json_data"
+	case "import":
+		return "scan_disk_json_data"
+	case "scraper":
+		return "scraper_json_data"
 	}
 	return ""
 }
@@ -136,6 +149,11 @@ func EffectiveLibraryConfig(db *gorm.DB, id, module, raw string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if module == "import" {
+		if _, ok := local["coverPosterType"]; !ok {
+			local["coverPosterType"] = -1
+		}
+	}
 	for k, v := range sharedFieldsOnly(module, shared) {
 		local[k] = v
 	}
@@ -145,18 +163,27 @@ func EffectiveLibraryConfig(db *gorm.DB, id, module, raw string) (string, error)
 
 // GuardSharedConfigWrite 防止旧页面、快捷操作及任务保存绕过跟随边界。
 func GuardSharedConfigWrite(db *gorm.DB, id, module, incoming string) error {
-	state, err := SharedConfigStatus(db, id, module)
+	var follow LibraryConfigFollow
+	err := db.Where("filesBases_id = ? AND module = ?", id, module).Take(&follow).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if !state.Following {
-		return nil
+	var shared SharedLibraryConfig
+	if err := db.Where("module = ?", module).Take(&shared).Error; err != nil {
+		return fmt.Errorf("公共配置不可用: %w", err)
+	}
+	expectedConfig, err := parseConfig(shared.Config)
+	if err != nil {
+		return err
 	}
 	data, err := parseConfig(incoming)
 	if err != nil {
 		return err
 	}
-	for k, expected := range state.Config {
+	for k, expected := range expectedConfig {
 		if !reflect.DeepEqual(data[k], expected) {
 			return errors.New("该分组正在跟随公共配置，请先关闭跟随再修改，或重新加载最新配置")
 		}
@@ -186,16 +213,45 @@ func SaveSharedConfig(db *gorm.DB, module string, revision int, raw string) erro
 	if err != nil {
 		return err
 	}
-	var typed datatype.Config_FilesBases
-	if err := json.Unmarshal(data, &typed); err != nil {
-		return fmt.Errorf("公共配置参数类型错误: %w", err)
+	switch module {
+	case "display":
+		var typed datatype.Config_FilesBases
+		if err := json.Unmarshal(data, &typed); err != nil {
+			return fmt.Errorf("公共配置参数类型错误: %w", err)
+		}
+		if _, ok := value["casualViewModule"].(bool); !ok {
+			return errors.New("随便看看开关必须为布尔值")
+		}
+		if n, ok := value["casualViewNumber"].(float64); !ok || n < 0 || n != float64(int(n)) {
+			return errors.New("随便看看数量必须为非负整数")
+		}
+	case "import":
+		var typed datatype.Config_ScanDisk
+		if err := json.Unmarshal(data, &typed); err != nil {
+			return fmt.Errorf("导入参数类型错误: %w", err)
+		}
+		if typed.ImportMode != "append" && typed.ImportMode != "cover" {
+			return errors.New("无效的导入方式")
+		}
+		if _, ok := value["nfo"].(map[string]interface{}); !ok {
+			return errors.New("NFO 配置必须为对象")
+		}
+		// 将嵌套 NFO 配置按定义重新编码，过滤未来或外部输入的未知成员。
+		nfoData, _ := json.Marshal(typed.Nfo)
+		var nfo map[string]interface{}
+		_ = json.Unmarshal(nfoData, &nfo)
+		value["nfo"] = nfo
+		data, _ = json.Marshal(value)
+	case "scraper":
+		var typed datatype.Config_Scraper
+		if err := json.Unmarshal(data, &typed); err != nil {
+			return fmt.Errorf("刮削参数类型错误: %w", err)
+		}
+		if typed.Concurrency < 1 || typed.Concurrency > 10 || typed.Timeout < 1 || typed.Timeout > 300 || typed.RetryCount < 0 || typed.RetryCount > 10 {
+			return errors.New("刮削并发、超时或重试次数超出允许范围")
+		}
 	}
-	if _, ok := value["casualViewModule"].(bool); !ok {
-		return errors.New("随便看看开关必须为布尔值")
-	}
-	if n, ok := value["casualViewNumber"].(float64); !ok || n < 0 || n != float64(int(n)) {
-		return errors.New("随便看看数量必须为非负整数")
-	}
+
 	if revision == 0 {
 		err := db.Create(&SharedLibraryConfig{Module: module, Revision: 1, Config: string(data)}).Error
 		if err != nil {
@@ -237,6 +293,12 @@ func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revi
 		return err
 	}
 	raw := setting.ConfigJsonData
+	if module == "import" {
+		raw = setting.ScanDiskJsonData
+	}
+	if module == "scraper" {
+		raw = setting.ScraperJsonData
+	}
 	effective, err := EffectiveLibraryConfig(db, id, module, raw)
 	if err != nil {
 		return err

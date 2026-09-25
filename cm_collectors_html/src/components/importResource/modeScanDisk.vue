@@ -1,6 +1,8 @@
 <template>
   <div class="mode-scan-disk" v-loading="loading">
-    <div class="block">
+    <SharedConfigBar v-if="configReady" ref="sharedBar" :files-bases-id="store.appStoreData.currentFilesBases.id" module="import"
+      :config="formData" local-hint="扫描目录和本库封面预设独立保存；公共参数不会同步目录或已有资源。" @config="applySharedConfig" />
+    <div class="block" :inert="sharedBar?.editing || undefined">
       <el-alert title="监控磁盘" type="success" :closable="false" />
       <ul class="scan-list">
         <li v-for="(item, index) in formData.scanDiskPaths" :key="index">
@@ -21,19 +23,19 @@
       <div class="block">
         <el-alert title="导入配置" type="success" :closable="false" />
 
-        <el-form-item label="监控文件后缀名">
+        <el-form-item :inert="sharedBar?.fieldDisabled('videoSuffixName') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('videoSuffixName') }" label="监控文件后缀名">
           <selectVideoSuffixName v-model="formData.videoSuffixName" multiple filterable allow-create
             default-first-option />
           <div><el-checkbox v-model="formData.autoGetVideoDefinition" label="自动获取视频清晰度" /></div>
         </el-form-item>
-        <el-form-item label="封面海报类型">
+        <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterType') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterType') }" label="封面海报类型">
           <el-select v-model="formData.coverPosterType">
             <el-option label="自适应尺寸" :value="-1" />
             <el-option v-for="item, index in store.appStoreData.currentConfigApp.coverPosterData" :key="index"
               :label="item.name" :value="index" />
           </el-select>
         </el-form-item>
-        <el-form-item label="资源命名方式">
+        <el-form-item :inert="sharedBar?.fieldDisabled('resourceNamingMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('resourceNamingMode') }" label="资源命名方式">
           <el-radio-group v-model="formData.resourceNamingMode" size="small">
             <el-radio-button label="文件名" value="fileName" />
             <el-radio-button label="目录名" value="dirName" />
@@ -41,7 +43,7 @@
             <el-radio-button label="全路径名" value="fullPathName" />
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="导入方式">
+        <el-form-item :inert="sharedBar?.fieldDisabled('importMode') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('importMode') }" label="导入方式">
           <div class="form-column-list">
             <el-radio-group v-model="formData.importMode" size="small">
               <el-radio-button label="追加导入" value="append" />
@@ -52,7 +54,7 @@
           </div>
         </el-form-item>
 
-        <el-form-item label="封面海报匹配名">
+        <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterMatchName') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterMatchName') }" label="封面海报匹配名">
           <el-select v-model="formData.coverPosterMatchName" multiple filterable allow-create default-first-option>
             <el-option v-for="item, key in dataset.coverPosterMatchName" :key="key" :label="item" :value="item" />
           </el-select>
@@ -63,23 +65,23 @@
           </div>
         </el-form-item>
 
-        <el-form-item label="封面海报后缀名">
+        <el-form-item :inert="sharedBar?.fieldDisabled('coverPosterSuffixName') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('coverPosterSuffixName') }" label="封面海报后缀名">
           <selectImageSuffixName v-model="formData.coverPosterSuffixName" multiple filterable allow-create
             default-first-option />
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('autoCreatePoster') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('autoCreatePoster') }">
           <el-checkbox v-model="formData.autoCreatePoster" label="(未找到封面海报) 自动截取视频内容作封面海报" />
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('folderToSeries') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('folderToSeries') }">
           <el-checkbox v-model="formData.folderToSeries" label="将同一文件夹下的多个视频文件合并为剧集" />
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('similarNameToSeries') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('similarNameToSeries') }">
           <div class="form-column-list">
             <el-checkbox v-model="formData.similarNameToSeries" label="将同一文件夹下名称相近的视频文件合并为剧集" />
             <div><el-text type="warning">适合连续剧文件名只差集数、分段号或少量字符的情况；开启“同一文件夹合并”时会优先使用完整文件夹合并。</el-text></div>
           </div>
         </el-form-item>
-        <el-form-item v-if="formData.folderToSeries || formData.similarNameToSeries" label="合并后的剧集排序">
+        <el-form-item :inert="sharedBar?.fieldDisabled('folderToSeries') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('folderToSeries') }" v-if="formData.folderToSeries || formData.similarNameToSeries" label="合并后的剧集排序">
           <div class="form-column-list">
             <el-select v-model="formData.folderToSeriesSortMode">
               <el-option label="保持现有顺序（新增分集追加到末尾）" value="keep" />
@@ -91,12 +93,12 @@
             <div><el-text type="warning">新增视频后会按所选方式重新排列该资源的全部分集。</el-text></div>
           </div>
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('enableNfoFuzzyMatch') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('enableNfoFuzzyMatch') }">
           <div class="form-column-list"><el-checkbox v-model="formData.enableNfoFuzzyMatch" label="开启nfo模糊匹配" />
             <div><el-text type="warning">例如：abc.mp4 可以匹配到：abc-C.nfo</el-text></div>
           </div>
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('useRandomNfoIfNoneMatch') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('useRandomNfoIfNoneMatch') }">
           <div class="form-column-list"><el-checkbox v-model="formData.useRandomNfoIfNoneMatch"
               label="开启nfo无法匹配时，使用目录下随机nfo文件" />
             <div><el-text type="warning">如果找不到与视频名称相同的nfo，自动使用视频目录下的一个nfo文件</el-text></div>
@@ -105,57 +107,57 @@
       </div>
       <div class="block">
         <el-alert title="nfo配置" type="success" :closable="false" />
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }">
           <div>
             <div><el-checkbox v-model="formData.nfo.nfoStatus" label="导入nfo文件" /></div>
             <div><el-text type="warning">次级节点标签请使用 . 链接</el-text></div>
           </div>
 
         </el-form-item>
-        <el-form-item label="根节点">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="根节点">
           <el-select v-model="formData.nfo.roots" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.roots" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="标题">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="标题">
           <el-select v-model="formData.nfo.titles" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.titles" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="版号番号">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="版号番号">
           <el-select v-model="formData.nfo.issueNumbers" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.issueNumbers" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="发行日期">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="发行日期">
           <el-select v-model="formData.nfo.issuingDates" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.issuingDates" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="评分">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="评分">
           <el-select v-model="formData.nfo.score" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.score" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="摘要简介">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="摘要简介">
           <el-select v-model="formData.nfo.abstracts" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.abstracts" :key="index" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="标签">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="标签">
           <el-select v-model="formData.nfo.tags" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.tags" :key="index" :label="item" :value="item" />
           </el-select>
           <el-checkbox v-model="formData.nfo.tagAutoCreate" label="自动添加标签" />
         </el-form-item>
-        <el-form-item label="演员姓名">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="演员姓名">
           <el-select v-model="formData.nfo.performerNames" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.performerNames" :key="index" :label="item" :value="item" />
           </el-select>
           <el-checkbox v-model="formData.nfo.performerMatchAliasName" label="同时匹配别名" />
           <el-checkbox v-model="formData.nfo.performerAutoCreate" label="自动添加演员" />
         </el-form-item>
-        <el-form-item label="演员头像">
+        <el-form-item :inert="sharedBar?.fieldDisabled('nfo') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('nfo') }" label="演员头像">
           <el-select v-model="formData.nfo.performerThumbs" multiple filterable allow-create default-first-option>
             <el-option v-for="item, index in dataset.nfo.performerThumbs" :key="index" :label="item" :value="item" />
           </el-select>
@@ -171,6 +173,7 @@
 </template>
 <script setup lang="ts">
 import { ref } from 'vue';
+import SharedConfigBar from '@/components/setting/SharedConfigBar.vue';
 import type { I_sfm_FileEntry } from '@/components/serverFileManagement/com/dataType';
 import { E_sfm_FileType } from '@/components/serverFileManagement/com/dataType';
 import serverFileManagementDialog from '@/components/serverFileManagement/serverFileManagementDialog.vue';
@@ -193,10 +196,14 @@ const emits = defineEmits(['success'])
 const serverFileManagementDialogRef = ref<InstanceType<typeof serverFileManagementDialog>>();
 const modeScanDiskImportDataDialogRef = ref<InstanceType<typeof modeScanDiskImportDataDialog>>();
 
+const sharedBar = ref<InstanceType<typeof SharedConfigBar>>();
+const configReady = ref(false);
+const applySharedConfig = (config: object) => { formData.value = config as I_config_scanDisk; };
 const loading = ref(false)
-const formData = ref<I_config_scanDisk>({ ...defualtConfigScanDisk })
+const formData = ref<I_config_scanDisk>(JSON.parse(JSON.stringify(defualtConfigScanDisk)))
 
 const init = async () => {
+  configReady.value = false;
   await getConfig();
 }
 
@@ -213,14 +220,15 @@ const getConfig = async () => {
       const config = JSON.parse(configStr);
       const legacySortMode = config.folderToSeriesSort === true ? 'nameAsc' : 'keep';
       formData.value = {
-        ...defualtConfigScanDisk,
+        ...JSON.parse(JSON.stringify(defualtConfigScanDisk)),
         ...config,
         folderToSeriesSortMode: config.folderToSeriesSortMode ?? legacySortMode,
       };
       delete formData.value.folderToSeriesSort;
     } else {
-      formData.value = { ...defualtConfigScanDisk };
+      formData.value = JSON.parse(JSON.stringify(defualtConfigScanDisk));
     }
+    configReady.value = true;
   } catch (error) {
     console.log(error);
   } finally {
@@ -229,7 +237,7 @@ const getConfig = async () => {
 }
 
 const getConfigScanDisk = (): I_config_scanDisk => {
-  const configData = formData.value;
+  const configData = JSON.parse(JSON.stringify(formData.value));
   if (configData.coverPosterType == -1) {
     configData.coverPosterWidth = 0;
     configData.coverPosterHeight = 0;
@@ -244,15 +252,18 @@ const getConfigScanDisk = (): I_config_scanDisk => {
 }
 
 const submit = debounceNow(async () => {
+  if (!configReady.value || !sharedBar.value?.state) { ElMessage.warning('请等待配置加载完成'); return; }
+  if (sharedBar.value.editing) { ElMessage.warning('请先保存或取消公共配置编辑，再执行任务'); return; }
   if (formData.value.scanDiskPaths.length == 0) {
     ElMessage.error('请先设置监控路径');
     return;
   }
   try {
-    const configData = getConfigScanDisk();
+    const configData = JSON.parse(JSON.stringify(getConfigScanDisk()));
 
+    const taskFilesBasesId = store.appStoreData.currentFilesBases.id;
     loading.value = true;
-    const result = await importDataServer.scanDiskImportPaths(store.appStoreData.currentFilesBases.id, configData);
+    const result = await importDataServer.scanDiskImportPaths(taskFilesBasesId, configData);
     if (!result.status) {
       ElMessage.error(result.msg);
       return;
@@ -260,7 +271,7 @@ const submit = debounceNow(async () => {
       ElMessage.error('没有可导入的数据');
       return;
     } else {
-      modeScanDiskImportDataDialogRef.value?.open(result.data, configData);
+      modeScanDiskImportDataDialogRef.value?.open(result.data, configData, taskFilesBasesId);
     }
   } catch (error) {
     ElMessage.error(String(error));
@@ -270,9 +281,11 @@ const submit = debounceNow(async () => {
 });
 
 const saveConfig = debounceNow(async () => {
+  if (!configReady.value || !sharedBar.value?.state) { ElMessage.warning('请等待配置加载完成'); return; }
+  if (sharedBar.value.editing) { await sharedBar.value.savePublic(); return; }
   try {
     loading.value = true;
-    const configData = getConfigScanDisk();
+    const configData = JSON.parse(JSON.stringify(getConfigScanDisk()));
     const result = await importDataServer.updateScanDiskConfig(store.appStoreData.currentFilesBases.id, configData);
     if (!result.status) {
       ElMessage.error(result.msg);
@@ -321,10 +334,11 @@ defineExpose({ init, submit, saveConfig })
 
 </script>
 <style lang="scss" scoped>
+.shared-locked { opacity: 0.55; }
 .mode-scan-disk {
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
 
   .block {
     .form-column-list {

@@ -32,12 +32,8 @@ import { ref, nextTick } from 'vue';
 import dialogCommon from '../com/dialog/dialog-common.vue';
 import { debounceNow } from '@/assets/debounce';
 import { importDataServer } from '@/server/importData.server';
-import { appStoreData } from '@/storeData/app.storeData';
 import type { I_config_scanDisk } from '@/dataType/config.dataType';
 import { ElMessageBox, ElTable } from 'element-plus';
-const store = {
-  appStoreData: appStoreData(),
-}
 interface I_pathList {
   path: string;
   status: boolean;
@@ -55,9 +51,12 @@ const waiting = ref(true);
 
 let config: I_config_scanDisk;
 let workStatus = true;
+let taskFilesBasesId = '';
+let taskGeneration = 0;
 
 
-const init = (_pathList: string[], _config: I_config_scanDisk) => {
+const init = (_pathList: string[], _config: I_config_scanDisk, filesBasesId: string) => {
+  taskGeneration++;
   workStatus = true;
   waiting.value = true;
   dialogCommonRef.value?.disabledSubmit(false);
@@ -70,10 +69,14 @@ const init = (_pathList: string[], _config: I_config_scanDisk) => {
       importing: false, // 初始化 importing 状态
     });
   });
-  config = _config;
+  config = JSON.parse(JSON.stringify(_config));
+  taskFilesBasesId = filesBasesId;
 }
 
 const submitHandle = debounceNow(async () => {
+  const generation = taskGeneration;
+  const taskConfig = config;
+  const taskLibraryId = taskFilesBasesId;
   dialogCommonRef.value?.disabledSubmit(true);
   waiting.value = false;
 
@@ -92,7 +95,7 @@ const submitHandle = debounceNow(async () => {
   });
 
   for (let i = 0; i < pathList.value.length; i++) {
-    if (!workStatus) {
+    if (!workStatus || generation !== taskGeneration) {
       return;
     }
 
@@ -106,17 +109,18 @@ const submitHandle = debounceNow(async () => {
       continue;
     }
 
-    const result = await importDataServer.scanDiskImportData(store.appStoreData.currentFilesBases.id, row.path, config);
+    const result = await importDataServer.scanDiskImportData(taskLibraryId, row.path, taskConfig);
     if (!result.status) {
       row.msg = result.msg;
     }
     row.status = true;
     row.importing = false; // 导入完成，取消 importing 状态
   }
-  success();
+  if (generation === taskGeneration) success();
 })
 
 const closeHandle = () => {
+  taskGeneration++;
   workStatus = false;
 }
 
@@ -127,8 +131,8 @@ const success = () => {
   emits('success');
 }
 
-const open = (_pathList: string[], _config: I_config_scanDisk) => {
-  init(_pathList, _config)
+const open = (_pathList: string[], _config: I_config_scanDisk, filesBasesId: string) => {
+  init(_pathList, _config, filesBasesId)
   dialogCommonRef.value?.open();
 
   // 默认全选：在对话框打开后，确保表格渲染完成再执行全选

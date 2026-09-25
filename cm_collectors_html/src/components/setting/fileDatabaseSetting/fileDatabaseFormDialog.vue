@@ -19,6 +19,8 @@
     <el-form-item label="公共配置">
       <el-checkbox-group v-model="followModules">
         <el-checkbox value="display" :disabled="!displayAvailable" label="跟随基础展示配置" />
+        <el-checkbox value="import" :disabled="!importAvailable" label="跟随导入规则" />
+        <el-checkbox value="scraper" :disabled="!scraperAvailable" label="跟随刮削参数" />
       </el-checkbox-group>
       <el-text v-if="!displayAvailable" type="info">可先在文件库设置中创建公共配置。</el-text>
     </el-form-item>
@@ -44,6 +46,8 @@ const dialogFormRef = ref<InstanceType<typeof dialogForm>>()
 
 const followModules = ref<string[]>([]);
 const displayAvailable = ref(false);
+const importAvailable = ref(false);
+const scraperAvailable = ref(false);
 const formData = ref({
   name: '',
   mainPerformerBasesId: store.performerBasesStoreData.activeFirstPerformerBasesId,
@@ -81,8 +85,13 @@ const mainPerformerBasesChange = () => {
 const open = async () => {
   followModules.value = [];
   displayAvailable.value = false;
-  const result = await sharedConfigServer.status('_new', 'display');
-  if (result.status) displayAvailable.value = result.data.available;
+  importAvailable.value = false;
+  scraperAvailable.value = false;
+  const results = await Promise.allSettled(['display', 'import', 'scraper'].map(module => sharedConfigServer.status('_new', module as 'display' | 'import' | 'scraper')));
+  [displayAvailable, importAvailable, scraperAvailable].forEach((available, index) => {
+    const result = results[index];
+    if (result.status === 'fulfilled' && result.value.status) available.value = result.value.data.available;
+  });
   dialogFormRef.value?.open()
 }
 

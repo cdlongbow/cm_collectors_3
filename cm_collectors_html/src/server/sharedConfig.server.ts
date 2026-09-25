@@ -1,6 +1,6 @@
 import request from '@/assets/request';
 
-export type SharedModule = 'display';
+export type SharedModule = 'display' | 'import' | 'scraper';
 export interface SharedConfigState {
   module: SharedModule;
   available: boolean;

@@ -3,6 +3,7 @@ package controllers
 import (
 	"cm_collectors_server/core"
 	"cm_collectors_server/models"
+	"cm_collectors_server/processors"
 	"cm_collectors_server/response"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -26,7 +27,7 @@ func (SharedConfig) Save(c *gin.Context) {
 	if ParameterHandleShouldBindJSON(c, &par) != nil {
 		return
 	}
-	err := models.SaveSharedConfig(core.DBS(), c.Param("module"), par.Revision, par.Config)
+	err := processors.SaveSharedLibraryConfig(c.Param("module"), par.Revision, par.Config)
 	if ResError(c, err) != nil {
 		return
 	}
@@ -42,7 +43,7 @@ func (SharedConfig) Follow(c *gin.Context) {
 		return
 	}
 	err := core.DBS().Transaction(func(tx *gorm.DB) error {
-		return models.SetLibraryConfigFollow(tx, c.Param("id"), c.Param("module"), par.Following, par.Revision)
+		return processors.FollowSharedLibraryConfig(tx, c.Param("id"), c.Param("module"), par.Following, par.Revision)
 	})
 	if ResError(c, err) != nil {
 		return

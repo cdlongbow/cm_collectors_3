@@ -49,11 +49,11 @@ const fieldDisabled = (key: string) => {
   return editing.value ? !shared : state.value.following && shared;
 };
 const reloadConfig = async () => {
-  const result = await filesBasesServer.getConfigById(props.filesBasesId, E_config_type.app);
+  const result = await filesBasesServer.getConfigById(props.filesBasesId, props.module === 'display' ? E_config_type.app : props.module === 'import' ? E_config_type.importScanDisk : E_config_type.scraper);
   if (!result.status) throw new Error(result.msg);
   emit('config', { ...props.config, ...JSON.parse(result.data || '{}') });
   const app = appStoreData();
-  if (app.currentFilesBases.id === props.filesBasesId) await app.initCurrentFilesBases(props.filesBasesId);
+  if (props.module === 'display' && app.currentFilesBases.id === props.filesBasesId) await app.initCurrentFilesBases(props.filesBasesId);
 };
 const toggleFollow = async (value: string | number | boolean) => {
   if (!state.value) return;

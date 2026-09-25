@@ -213,6 +213,7 @@ type Config_ScanDisk_Nfo struct {
 }
 
 type Config_Scraper struct {
+	Concurrency          int      `json:"concurrency"`
 	ScanDiskPaths        []string `json:"scanDiskPaths"`
 	VideoSuffixName      []string `json:"videoSuffixName"`
 	ScraperConfigs       []string `json:"scraperConfigs"`

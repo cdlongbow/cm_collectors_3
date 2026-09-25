@@ -27,7 +27,7 @@ describe('公共配置交互边界', () => {
     vi.mocked(sharedConfigServer.follow).mockResolvedValue(ok(true));
     vi.mocked(sharedConfigServer.save).mockResolvedValue(ok(true));
     vi.mocked(filesBasesServer.getConfigById).mockResolvedValue(ok('{"pageLimit":64,"coverDisplayTag":["local"]}'));
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm');
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>);
   });
   it('跟随只锁定共享字段，编辑公共配置时只开放共享字段，取消恢复草稿', async () => {
     const w = makeWrapper(); await flushPromises();
@@ -61,6 +61,19 @@ describe('公共配置交互边界', () => {
     await w.findAll('button').find(b => b.text() === '保存公共配置')!.trigger('click'); await flushPromises();
     expect(w.vm.editing).toBe(true);
     expect(w.emitted('saved')).toBeUndefined();
+    w.unmount();
+  });
+  it.each(['import', 'scraper'] as const)('%s 跟随切换读取对应配置分组并保留本库目录', async (module) => {
+    vi.mocked(sharedConfigServer.status).mockResolvedValue(ok({ ...state(), module, fields: ['timeout'], config: { timeout: 30 } }));
+    vi.mocked(filesBasesServer.getConfigById).mockResolvedValue(ok('{"timeout":30,"scanDiskPaths":["local-dir"]}'));
+    const w = makeWrapper();
+    await w.setProps({ module, config: { timeout: 60, scanDiskPaths: ['local-dir'] } });
+    await flushPromises();
+    expect(w.vm.fieldDisabled('scanDiskPaths')).toBe(false);
+    await w.get('input').trigger('change'); await flushPromises();
+    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', module, false, 3);
+    expect(filesBasesServer.getConfigById).toHaveBeenCalledWith('A', module === 'import' ? 'importScanDisk' : 'scraper');
+    expect(w.emitted('config')?.at(-1)).toEqual([{ timeout: 30, scanDiskPaths: ['local-dir'] }]);
     w.unmount();
   });
 });

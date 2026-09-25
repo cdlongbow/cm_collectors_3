@@ -15,8 +15,8 @@
 - [Gfriends 演员头像库设计](design/performer-avatar-library.md)：独立头像数据文件、匹配策略、单人和批量更新流程。
 - [视频元数据采集与历史补齐设计](design/video-metadata-collection.md)：视频元数据表、旧数据迁移、统一触发去重、手动补齐和多库计划任务方案。
 
-## Testing
-
 - [文件库公共基础配置](design/shared-library-config.md)：按分组跟随、独立字段边界、分期提交和回归验证。
+
+## Testing
 
 - [测试指南](testing/testing-guide.md)：已有测试入口、建议验证方式和验收清单。

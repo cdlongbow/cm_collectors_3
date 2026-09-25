@@ -1,6 +1,8 @@
 <template>
   <div class="scraper-data" v-loading="loading">
-    <div class="block">
+    <SharedConfigBar v-if="configReady" ref="sharedBar" :files-bases-id="store.appStoreData.currentFilesBases.id" module="scraper"
+      :config="formData" local-hint="扫描目录和本库封面预设独立保存；公共参数不会同步目录或已有资源。" @config="applySharedConfig" />
+    <div class="block" :inert="sharedBar?.editing || undefined">
       <el-alert title="监控磁盘" type="success" :closable="false" />
       <ul class="scan-list">
         <li v-for="(item, index) in formData.scanDiskPaths" :key="index">
@@ -20,27 +22,27 @@
     <el-form ref="ruleFormRef" :model="formData" label-width="160px" status-icon>
       <div class="block">
         <el-alert title="刮削配置" type="success" :closable="false" />
-        <el-form-item label="监控文件后缀名">
+        <el-form-item :inert="sharedBar?.fieldDisabled('videoSuffixName') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('videoSuffixName') }" label="监控文件后缀名">
           <selectVideoSuffixName v-model="formData.videoSuffixName" multiple filterable allow-create
             default-first-option />
         </el-form-item>
-        <el-form-item label="应用刮削器配置文件">
+        <el-form-item :inert="sharedBar?.fieldDisabled('scraperConfigs') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('scraperConfigs') }" label="应用刮削器配置文件">
           <selectScraperConfig v-model="formData.scraperConfigs" multiple />
         </el-form-item>
-        <el-form-item label="并发处理数量">
+        <el-form-item :inert="sharedBar?.fieldDisabled('concurrency') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('concurrency') }" label="并发处理数量">
           <el-input-number v-model="formData.concurrency" :min="1" :max="10" />
         </el-form-item>
-        <el-form-item label="重试次数">
+        <el-form-item :inert="sharedBar?.fieldDisabled('retryCount') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('retryCount') }" label="重试次数">
           <el-input-number v-model="formData.retryCount" :min="0" :max="10" />
         </el-form-item>
-        <el-form-item label="超时时间">
+        <el-form-item :inert="sharedBar?.fieldDisabled('timeout') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('timeout') }" label="超时时间">
           <el-input-number v-model="formData.timeout" :min="1" :max="300" />
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('skipIfNfoExists') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('skipIfNfoExists') }">
           <el-checkbox v-model="formData.skipIfNfoExists" label="已存在nfo文件时跳过" />
           <el-checkbox v-model="formData.saveNfo" label="保存元数据为nfo文件" />
         </el-form-item>
-        <el-form-item>
+        <el-form-item :inert="sharedBar?.fieldDisabled('enableDownloadImages') || undefined" :class="{ 'shared-locked': sharedBar?.fieldDisabled('enableDownloadImages') }">
           <div>
             <el-checkbox v-model="formData.enableDownloadImages" label="下载元数据中的图片链接" />
             <el-checkbox v-model="formData.useTagAsImageName" label="使用标签名作为图片名" />
@@ -68,6 +70,7 @@ import { E_config_type, type I_config_scraperData, defualtConfigScraperData } fr
 import selectVideoSuffixName from '../com/form/selectVideoSuffixName.vue';
 import selectScraperConfig from '../com/form/selectScraperConfig.vue';
 import { ref } from 'vue';
+import SharedConfigBar from '@/components/setting/SharedConfigBar.vue';
 import { filesBasesServer } from '@/server/filesBases.server';
 import { appStoreData } from '@/storeData/app.storeData';
 import { ElMessage } from 'element-plus';
@@ -80,10 +83,14 @@ const store = {
 const emits = defineEmits(['success'])
 const serverFileManagementDialogRef = ref<InstanceType<typeof serverFileManagementDialog>>();
 const scraperDataProcessDialogRef = ref<InstanceType<typeof scraperDataProcessDialog>>();
+const sharedBar = ref<InstanceType<typeof SharedConfigBar>>();
+const configReady = ref(false);
+const applySharedConfig = (config: object) => { formData.value = config as I_config_scraperData; };
 const loading = ref(false)
-const formData = ref<I_config_scraperData>({ ...defualtConfigScraperData })
+const formData = ref<I_config_scraperData>(JSON.parse(JSON.stringify(defualtConfigScraperData)))
 
 const init = async () => {
+  configReady.value = false;
   await getConfig();
 }
 const getConfig = async () => {
@@ -97,10 +104,11 @@ const getConfig = async () => {
     const configStr = result.data;
     if (configStr != '') {
       const config = JSON.parse(configStr);
-      formData.value = { ...defualtConfigScraperData, ...config };
+      formData.value = { ...JSON.parse(JSON.stringify(defualtConfigScraperData)), ...config };
     } else {
-      formData.value = { ...defualtConfigScraperData };
+      formData.value = JSON.parse(JSON.stringify(defualtConfigScraperData));
     }
+    configReady.value = true;
   } catch (error) {
     console.log(error);
   } finally {
@@ -134,6 +142,8 @@ const deleteDiskLocationHandle = (index: number) => {
 }
 
 const submit = debounceNow(async () => {
+  if (!configReady.value || !sharedBar.value?.state) { ElMessage.warning('请等待配置加载完成'); return; }
+  if (sharedBar.value.editing) { ElMessage.warning('请先保存或取消公共配置编辑，再执行任务'); return; }
   if (formData.value.scanDiskPaths.length == 0) {
     ElMessage.error('请先设置监控路径');
     return;
@@ -143,9 +153,10 @@ const submit = debounceNow(async () => {
     return;
   }
   try {
-    const configData = formData.value;
+    const configData = JSON.parse(JSON.stringify(formData.value));
+    const taskFilesBasesId = store.appStoreData.currentFilesBases.id;
     loading.value = true;
-    const result = await scraperDataServer.pretreatment(store.appStoreData.currentFilesBases.id, configData);
+    const result = await scraperDataServer.pretreatment(taskFilesBasesId, configData);
     if (!result.status) {
       ElMessage.error(result.msg);
       return;
@@ -153,7 +164,7 @@ const submit = debounceNow(async () => {
       ElMessage.error('没有可刮削的数据');
       return;
     } else {
-      scraperDataProcessDialogRef.value?.open(result.data, configData);
+      scraperDataProcessDialogRef.value?.open(result.data, configData, taskFilesBasesId);
     }
   } catch (error) {
     console.log(error);
@@ -163,9 +174,11 @@ const submit = debounceNow(async () => {
 });
 
 const saveConfig = debounceNow(async () => {
+  if (!configReady.value || !sharedBar.value?.state) { ElMessage.warning('请等待配置加载完成'); return; }
+  if (sharedBar.value.editing) { await sharedBar.value.savePublic(); return; }
   try {
     loading.value = true;
-    const configData = formData.value;
+    const configData = JSON.parse(JSON.stringify(formData.value));
     const result = await scraperDataServer.updateResScraperConfig(store.appStoreData.currentFilesBases.id, configData);
     if (!result.status) {
       ElMessage.error(result.msg);
@@ -187,10 +200,11 @@ const successHandle = () => {
 defineExpose({ init, submit, saveConfig })
 </script>
 <style lang="scss" scoped>
+.shared-locked { opacity: 0.55; }
 .scraper-data {
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
 
   .block {
 
