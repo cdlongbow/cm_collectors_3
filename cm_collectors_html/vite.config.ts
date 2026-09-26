@@ -12,6 +12,10 @@ export default defineConfig({
     vueJsx(),
     //vueDevTools(),
   ],
+  optimizeDeps: {
+    // 只扫描应用入口，避免 test-results 中的临时 HTML 引用失效的开发缓存。
+    entries: ['index.html'],
+  },
   build: {
     assetsDir: 'assets', // 静态资源目录
     emptyOutDir: true // 清空输出目录
