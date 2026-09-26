@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { VNode } from 'vue'
 import SharedConfigBar from '../SharedConfigBar.vue'
 import { sharedConfigServer } from '@/server/sharedConfig.server'
 import { filesBasesServer } from '@/server/filesBases.server'
@@ -39,6 +40,7 @@ const ok = <T>(data: T) => ({ status: true, statusCode: 200, msg: '', data })
 const state = (following = true) => ({
   module: 'display' as const,
   following,
+  canRestore: true,
   available: true,
   revision: 3,
   fields: ['pageLimit'],
@@ -184,7 +186,43 @@ describe('公共配置独立弹窗', () => {
     expect(sharedConfigServer.follow).not.toHaveBeenCalled()
     await w.get('input[type="checkbox"]').trigger('change')
     await flushPromises()
-    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', 'display', false, 3)
+    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', 'display', false, 3, 'keep')
+    w.unmount()
+  })
+  it('选择恢复原配置后提交 restore，缺失参数恢复默认值而不是残留公共值', async () => {
+    vi.mocked(filesBasesServer.getConfigById).mockResolvedValue(ok('{"sampleFolder":"saved-dir"}'))
+    vi.mocked(ElMessageBox.confirm).mockImplementationOnce(async (message) => {
+      const choices = mount({ render: () => message as VNode })
+      expect(choices.text()).toContain('恢复跟随前的本库配置')
+      const restore = choices.findAll('input')[1]
+      expect(restore.attributes('disabled')).toBeUndefined()
+      await restore.setValue()
+      choices.unmount()
+      return 'confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>
+    })
+    const w = makeWrapper()
+    await flushPromises()
+    await w.setProps({ config: { pageLimit: 999, sampleFolder: 'unsaved-dir' } })
+    await w.get('input[type="checkbox"]').trigger('change')
+    await flushPromises()
+    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', 'display', false, 3, 'restore')
+    expect(w.emitted('config')?.at(-1)).toEqual([expect.objectContaining({ pageLimit: 32, sampleFolder: 'saved-dir' })])
+    w.unmount()
+  })
+  it('没有历史快照时禁用恢复并提示，只保留当前公共配置', async () => {
+    vi.mocked(sharedConfigServer.status).mockResolvedValue(ok({ ...state(), canRestore: false }))
+    vi.mocked(ElMessageBox.confirm).mockImplementationOnce(async (message) => {
+      const choices = mount({ render: () => message as VNode })
+      expect(choices.text()).toContain('没有历史快照')
+      expect(choices.findAll('input')[1].attributes('disabled')).toBeDefined()
+      choices.unmount()
+      return 'confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>
+    })
+    const w = makeWrapper()
+    await flushPromises()
+    await w.get('input[type="checkbox"]').trigger('change')
+    await flushPromises()
+    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', 'display', false, 3, 'keep')
     w.unmount()
   })
   it.each(['import', 'scraper'] as const)('%s 跟随切换读取对应配置分组', async (module) => {
@@ -199,12 +237,12 @@ describe('公共配置独立弹窗', () => {
     await flushPromises()
     await w.get('input[type="checkbox"]').trigger('change')
     await flushPromises()
-    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', module, false, 3)
+    expect(sharedConfigServer.follow).toHaveBeenCalledWith('A', module, false, 3, 'keep')
     expect(filesBasesServer.getConfigById).toHaveBeenCalledWith(
       'A',
       module === 'import' ? 'importScanDisk' : 'scraper',
     )
-    expect(w.emitted('config')?.at(-1)).toEqual([{ timeout: 30, scanDiskPaths: ['local-dir'] }])
+    expect(w.emitted('config')?.at(-1)).toEqual([expect.objectContaining({ timeout: 30, scanDiskPaths: ['local-dir'] })])
     w.unmount()
   })
   it('切换文件库关闭旧弹窗，不将旧草稿带入新库', async () => {

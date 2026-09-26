@@ -517,6 +517,7 @@ func AutoDatabase(db *gorm.DB) error {
 		},
 		{ID: "resource_play_daily_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&ResourcePlayDaily{}) }},
 		{ID: "shared_library_config_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&SharedLibraryConfig{}, &LibraryConfigFollow{}) }},
+		{ID: "shared_library_config_snapshot_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&LibraryConfigFollow{}) }},
 	})
 	errMigrate := m.Migrate()
 	if errMigrate != nil {

@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   sharedConfigServer,
@@ -148,17 +148,31 @@ const reloadConfig = async () => {
   )
   if (before !== context()) return
   if (!result.status) throw new Error(result.msg)
-  emit('config', { ...props.config, ...JSON.parse(result.data || '{}') })
+  const defaults = props.module === 'display' ? createDefaultConfigApp()
+    : props.module === 'import' ? defualtConfigScanDisk : defualtConfigScraperData
+  emit('config', { ...clone(defaults), ...JSON.parse(result.data || '{}') })
   await refreshApp()
 }
 const toggleFollow = async (value: string | number | boolean) => {
   if (!state.value || busy.value) return
   const before = context()
   try {
+    let detachMode: 'keep' | 'restore' = 'keep'
+    const option = (mode: 'keep' | 'restore', label: string, disabled = false) =>
+      h('label', { style: 'display:flex;gap:8px;align-items:center;margin:14px 0;cursor:pointer;opacity:' + (disabled ? '0.5' : '1') }, [
+        h('input', { type: 'radio', name: 'detach-shared-config', value: mode, checked: mode === detachMode, disabled, onChange: () => { detachMode = mode } }),
+        h('span', label),
+      ])
     await ElMessageBox.confirm(
       value
-        ? '将使用公共配置替换本分组的通用参数。未保存的参数修改将丢弃，本库目录和关联项不受影响。'
-        : '关闭跟随后保留当前生效配置，此后独立修改。',
+        ? '开启后使用公共配置，并备份本库已保存的通用参数，关闭时可选择恢复。页面上未保存的修改会丢弃，请先保存需要保留的修改。'
+        : h('div', [
+            h('p', '关闭后，本分组将独立设置。请选择通用参数的来源：'),
+            option('keep', '保留当前公共配置，作为本库配置'),
+            option('restore', '恢复跟随前的本库配置', !state.value.canRestore),
+            !state.value.canRestore ? h('p', '此次跟随没有历史快照，无法恢复开启前的参数。') : null,
+            h('p', '本库已保存的目录和关联项保持当前值；页面上未保存的修改会丢弃。'),
+          ]),
       '切换配置来源',
     )
     if (before !== context()) return
@@ -168,6 +182,7 @@ const toggleFollow = async (value: string | number | boolean) => {
       props.module,
       !!value,
       state.value.revision,
+      detachMode,
     )
     if (!result.status) throw new Error(result.msg)
     if (before !== context()) return

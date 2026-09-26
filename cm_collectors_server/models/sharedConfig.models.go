@@ -22,20 +22,22 @@ type SharedLibraryConfig struct {
 func (SharedLibraryConfig) TableName() string { return "shared_library_config" }
 
 type LibraryConfigFollow struct {
-	FilesBasesID string `json:"filesBasesId" gorm:"column:filesBases_id;primaryKey;type:char(20)"`
-	Module       string `json:"module" gorm:"primaryKey;size:32"`
+	LocalSnapshot *string `json:"-" gorm:"type:text"`
+	FilesBasesID  string  `json:"filesBasesId" gorm:"column:filesBases_id;primaryKey;type:char(20)"`
+	Module        string  `json:"module" gorm:"primaryKey;size:32"`
 }
 
 func (LibraryConfigFollow) TableName() string { return "library_config_follow" }
 
 type SharedConfigState struct {
-	Module    string                 `json:"module"`
-	Available bool                   `json:"available"`
-	Following bool                   `json:"following"`
-	Revision  int                    `json:"revision"`
-	Fields    []string               `json:"fields"`
-	Config    map[string]interface{} `json:"config"`
-	Libraries []SharedConfigLibrary  `json:"libraries"`
+	CanRestore bool                   `json:"canRestore"`
+	Module     string                 `json:"module"`
+	Available  bool                   `json:"available"`
+	Following  bool                   `json:"following"`
+	Revision   int                    `json:"revision"`
+	Fields     []string               `json:"fields"`
+	Config     map[string]interface{} `json:"config"`
+	Libraries  []SharedConfigLibrary  `json:"libraries"`
 }
 
 type SharedConfigLibrary struct {
@@ -124,6 +126,13 @@ func SharedConfigStatus(db *gorm.DB, id, module string) (*SharedConfigState, err
 		return nil, err
 	}
 	state.Following = count > 0
+	if state.Following {
+		var follow LibraryConfigFollow
+		if err := db.Where("filesBases_id = ? AND module = ?", id, module).Take(&follow).Error; err != nil {
+			return nil, err
+		}
+		state.CanRestore = follow.LocalSnapshot != nil
+	}
 	err = db.Table((LibraryConfigFollow{}).TableName()+" AS f").Select("b.id, b.name").Joins("JOIN filesBases AS b ON b.id = f.filesBases_id").Where("f.module = ?", module).Order("b.sort, b.id").Scan(&state.Libraries).Error
 	return state, err
 }
@@ -273,8 +282,8 @@ func SaveSharedConfig(db *gorm.DB, module string, revision int, raw string) erro
 	return nil
 }
 
-// SetLibraryConfigFollow 必须在事务中调用。退出时物化当前生效配置，不能恢复历史本地值。
-func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revision int) error {
+// SetLibraryConfigFollow 必须在事务中调用。开启时保存通用字段快照；退出可恢复或保留当前值。
+func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revision int, detachModes ...string) error {
 	state, err := SharedConfigStatus(db, id, module)
 	if err != nil {
 		return err
@@ -286,10 +295,17 @@ func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revi
 	if err := db.Where("id = ?", id).Take(&library).Error; err != nil {
 		return err
 	}
-	if following {
-		return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&LibraryConfigFollow{FilesBasesID: id, Module: module}).Error
+	mode := "keep"
+	if len(detachModes) > 0 && detachModes[0] != "" {
+		mode = detachModes[0]
 	}
-	if !state.Following {
+	if mode != "keep" && mode != "restore" {
+		return errors.New("不支持的退出跟随方式")
+	}
+	if following && state.Following {
+		return nil
+	}
+	if !following && !state.Following {
 		return nil
 	}
 	var setting FilesBasesSetting
@@ -303,9 +319,48 @@ func SetLibraryConfigFollow(db *gorm.DB, id, module string, following bool, revi
 	if module == "scraper" {
 		raw = setting.ScraperJsonData
 	}
-	effective, err := EffectiveLibraryConfig(db, id, module, raw)
+	local, err := parseConfig(raw)
 	if err != nil {
 		return err
+	}
+	if following {
+		data, err := json.Marshal(sharedFieldsOnly(module, local))
+		if err != nil {
+			return err
+		}
+		snapshot := string(data)
+		return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&LibraryConfigFollow{FilesBasesID: id, Module: module, LocalSnapshot: &snapshot}).Error
+	}
+	var effective string
+	if mode == "restore" {
+		var follow LibraryConfigFollow
+		if err := db.Where("filesBases_id = ? AND module = ?", id, module).Take(&follow).Error; err != nil {
+			return err
+		}
+		if follow.LocalSnapshot == nil {
+			return errors.New("没有跟随前的配置快照，请选择保留当前公共配置")
+		}
+		snapshot, err := parseConfig(*follow.LocalSnapshot)
+		if err != nil {
+			return err
+		}
+		// 只恢复通用参数；跟随期间修改的目录、演员选择等独立项保持当前值。
+		for _, field := range SharedConfigFields(module) {
+			delete(local, field)
+			if value, ok := snapshot[field]; ok {
+				local[field] = value
+			}
+		}
+		data, err := json.Marshal(local)
+		if err != nil {
+			return err
+		}
+		effective = string(data)
+	} else {
+		effective, err = EffectiveLibraryConfig(db, id, module, raw)
+		if err != nil {
+			return err
+		}
 	}
 	if err := db.Model(&FilesBasesSetting{}).Where("filesBases_id = ?", id).Update(sharedConfigColumn(module), effective).Error; err != nil {
 		return err

@@ -5,6 +5,7 @@ export interface SharedConfigState {
   module: SharedModule;
   available: boolean;
   following: boolean;
+  canRestore?: boolean;
   revision: number;
   fields: string[];
   config: Record<string, unknown>;
@@ -16,7 +17,7 @@ export const sharedConfigServer = {
   save: (module: SharedModule, revision: number, config: object) => request<boolean>({
     url: `/filesBases/shared/${module}`, method: 'put', data: { revision, config: JSON.stringify(config) },
   }),
-  follow: (id: string, module: SharedModule, following: boolean, revision: number) => request<boolean>({
-    url: `/filesBases/follow/${module}/${id}`, method: 'put', data: { following, revision },
+  follow: (id: string, module: SharedModule, following: boolean, revision: number, detachMode: 'keep' | 'restore' = 'keep') => request<boolean>({
+    url: `/filesBases/follow/${module}/${id}`, method: 'put', data: { following, revision, detachMode },
   }),
 };

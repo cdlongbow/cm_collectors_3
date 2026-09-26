@@ -36,14 +36,15 @@ func (SharedConfig) Save(c *gin.Context) {
 
 func (SharedConfig) Follow(c *gin.Context) {
 	var par struct {
-		Following bool `json:"following"`
-		Revision  int  `json:"revision"`
+		Following  bool   `json:"following"`
+		DetachMode string `json:"detachMode"`
+		Revision   int    `json:"revision"`
 	}
 	if ParameterHandleShouldBindJSON(c, &par) != nil {
 		return
 	}
 	err := core.DBS().Transaction(func(tx *gorm.DB) error {
-		return processors.FollowSharedLibraryConfig(tx, c.Param("id"), c.Param("module"), par.Following, par.Revision)
+		return processors.FollowSharedLibraryConfig(tx, c.Param("id"), c.Param("module"), par.Following, par.Revision, par.DetachMode)
 	})
 	if ResError(c, err) != nil {
 		return

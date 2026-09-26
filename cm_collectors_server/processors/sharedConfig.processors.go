@@ -41,7 +41,7 @@ func SaveSharedLibraryConfig(module string, revision int, raw string) error {
 	return models.SaveSharedConfig(core.DBS(), module, revision, raw)
 }
 
-func FollowSharedLibraryConfig(tx *gorm.DB, id, module string, following bool, revision int) error {
+func FollowSharedLibraryConfig(tx *gorm.DB, id, module string, following bool, revision int, detachModes ...string) error {
 	if following && module == "scraper" {
 		state, err := models.SharedConfigStatus(tx, id, module)
 		if err != nil {
@@ -55,5 +55,5 @@ func FollowSharedLibraryConfig(tx *gorm.DB, id, module string, following bool, r
 			return err
 		}
 	}
-	return models.SetLibraryConfigFollow(tx, id, module, following, revision)
+	return models.SetLibraryConfigFollow(tx, id, module, following, revision, detachModes...)
 }
