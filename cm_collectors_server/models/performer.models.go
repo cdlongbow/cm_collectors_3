@@ -440,37 +440,6 @@ func (Performer) DataListByIds(db *gorm.DB, ids []string) (*[]Performer, error) 
 	return &dataList, err
 }
 
-func (t Performer) ListTopPreferredPerformers(db *gorm.DB, preferredIds []string, mainPerformerBasesId string, shieldNoPerformerPhoto bool, limit int, countFilesBasesId string) (*[]Performer, error) {
-	var dataList []Performer
-
-	dataListByIds, err := t.ListByIds(db, preferredIds, countFilesBasesId)
-	if err != nil {
-		return nil, err
-	}
-	surplus := limit - len(*dataListByIds)
-
-	if surplus > 0 {
-		var surplusDataList []Performer
-		query := db.Model(Performer{}).Where("performerBases_id = ? and status = 1", mainPerformerBasesId)
-		if shieldNoPerformerPhoto {
-			query = query.Where("photo != ''")
-		}
-		err := query.Order("addTime desc").Limit(surplus).Find(&surplusDataList).Error
-		if err != nil {
-			return nil, err
-		}
-		//组合数据
-		err = t.fillResourceCounts(db, surplusDataList, countFilesBasesId)
-		if err != nil {
-			return nil, err
-		}
-		dataList = append(*dataListByIds, surplusDataList...)
-	} else {
-		dataList = *dataListByIds
-	}
-
-	return &dataList, err
-}
 func (t Performer) RecycleBin(db *gorm.DB, performerBasesId string) (*[]Performer, error) {
 	var dataList []Performer
 	err := db.Where("performerBases_id = ?", performerBasesId).Where("status = ?", false).Find(&dataList).Error

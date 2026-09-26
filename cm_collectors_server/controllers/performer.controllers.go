@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"cm_collectors_server/datatype"
+	"cm_collectors_server/models"
 	"cm_collectors_server/processors"
 	"cm_collectors_server/response"
 	"strings"
@@ -92,7 +93,7 @@ func (Performer) ListTopPreferredPerformers(c *gin.Context) {
 	}
 	// 常用演员接口也可能出现在某个具体文件库首页，需要按当前文件库统计角标数量。
 	countFilesBasesId := c.Query("countFilesBasesId")
-	dataList, err := processors.Performer{}.ListTopPreferredPerformers(par.PreferredIds, par.MainPerformerBasesId, par.ShieldNoPerformerPhoto, par.Limit, countFilesBasesId)
+	dataList, err := processors.Performer{}.ListTopPreferredPerformers(par.PreferredIds, par.MainPerformerBasesId, par.ShieldNoPerformerPhoto, par.Limit, countFilesBasesId, models.SidebarPerformerOptions{SortMode: par.SortMode, RecentDays: par.RecentDays})
 	if err := ResError(c, err); err != nil {
 		return
 	}

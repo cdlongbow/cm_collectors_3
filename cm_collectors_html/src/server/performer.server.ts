@@ -14,7 +14,7 @@ export const performerServer = {
       }
     })
   },
-  listTopPreferredPerformers: async (preferredIds: string[], mainPerformerBasesId: string, shieldNoPerformerPhoto: boolean, limit: number, countFilesBasesId = '') => {
+  listTopPreferredPerformers: async (preferredIds: string[], mainPerformerBasesId: string, shieldNoPerformerPhoto: boolean, limit: number, countFilesBasesId = '', sortMode = 'default', recentDays = 30) => {
     return await request<I_performer[]>({
       url: `${routerGroupUri}/performer/list/top/preferred`,
       method: 'post',
@@ -22,6 +22,8 @@ export const performerServer = {
         countFilesBasesId,
       },
       data: {
+        sortMode,
+        recentDays,
         preferredIds,
         mainPerformerBasesId,
         shieldNoPerformerPhoto,

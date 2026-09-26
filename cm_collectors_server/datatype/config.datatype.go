@@ -115,7 +115,10 @@ type Config_FilesBases struct {
 	LeftDisplay                  []ETagType                `json:"leftDisplay"`                  // 左侧栏显示内容
 	PageLimit                    int                       `json:"pageLimit"`                    // 分页数量
 	PerformerPhoto               bool                      `json:"performerPhoto"`               // 左侧栏-演员图片是否开启
+	PerformerSortMode            string                    `json:"performerSortMode"`            // 左侧栏-其余演员排序
+	PerformerRecentDays          int                       `json:"performerRecentDays"`          // 左侧栏-近期统计天数
 	PerformerPreferred           []string                  `json:"performerPreferred"`           // 左侧栏-优先显示演员
+	PerformerPreferredEnabled    *bool                     `json:"performerPreferredEnabled,omitempty"` // 是否启用自定义优先演员，缺省启用
 	ShowPerformerResourceCount   bool                      `json:"showPerformerResourceCount"`   // 演员卡片是否显示关联资源数量
 	PerformerShowNum             int                       `json:"performerShowNum"`             // 左侧栏-演员显示数量
 	PerformerText                string                    `json:"performer_Text"`               // 演员显示名称

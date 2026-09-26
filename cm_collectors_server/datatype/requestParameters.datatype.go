@@ -154,6 +154,8 @@ type ReqParam_PerformersList struct {
 
 // 请求参数 - 获取喜爱的演员列表
 type ReqParam_TopPreferredPerformers struct {
+	SortMode               string   `json:"sortMode"`
+	RecentDays             int      `json:"recentDays"`
 	PreferredIds           []string `json:"preferredIds"`           //喜欢演员的ids
 	MainPerformerBasesId   string   `json:"mainPerformerBasesId"`   //主演员集id
 	ShieldNoPerformerPhoto bool     `json:"shieldNoPerformerPhoto"` //屏蔽无头像演员

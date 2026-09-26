@@ -68,8 +68,8 @@ func (Performer) DataListByIds(ids []string, ordered bool) (*[]models.Performer,
 	return dataList, nil
 }
 
-func (Performer) ListTopPreferredPerformers(preferredIds []string, mainPerformerBasesId string, shieldNoPerformerPhoto bool, limit int, countFilesBasesId string) (*[]models.Performer, error) {
-	return models.Performer{}.ListTopPreferredPerformers(core.DBS(), preferredIds, mainPerformerBasesId, shieldNoPerformerPhoto, limit, countFilesBasesId)
+func (Performer) ListTopPreferredPerformers(preferredIds []string, mainPerformerBasesId string, shieldNoPerformerPhoto bool, limit int, countFilesBasesId string, options ...models.SidebarPerformerOptions) (*[]models.Performer, error) {
+	return models.Performer{}.ListTopPreferredPerformers(core.DBS(), preferredIds, mainPerformerBasesId, shieldNoPerformerPhoto, limit, countFilesBasesId, options...)
 }
 func (Performer) SearchScraperFilter(performerBasesId, lastScraperUpdateTime, createdAt, hasPhoto string) (*[]models.PerformerBasic, error) {
 	return models.Performer{}.SearchScraperFilter(core.DBS(), performerBasesId, lastScraperUpdateTime, createdAt, hasPhoto)

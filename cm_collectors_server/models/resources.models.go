@@ -749,8 +749,19 @@ func (Resources) Create(db *gorm.DB, resources *Resources) error {
 }
 
 func (Resources) DeleteById(db *gorm.DB, id string) error {
-	return db.Unscoped().Where("id = ? ", id).Delete(&Resources{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("resources_id = ?", id).Delete(&ResourcePlayDaily{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("id = ?", id).Delete(&Resources{}).Error
+	})
 }
 func (Resources) DeleteByFilesBasesID(db *gorm.DB, filesBases_id string) error {
-	return db.Unscoped().Where("filesBases_id = ?", filesBases_id).Delete(&Resources{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		ids := tx.Model(&Resources{}).Select("id").Where("filesBases_id = ?", filesBases_id)
+		if err := tx.Where("resources_id IN (?)", ids).Delete(&ResourcePlayDaily{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("filesBases_id = ?", filesBases_id).Delete(&Resources{}).Error
+	})
 }

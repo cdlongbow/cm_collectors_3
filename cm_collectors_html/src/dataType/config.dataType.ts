@@ -56,7 +56,10 @@ export interface I_config_app {
   leftDisplay: E_tagType[]; // 左侧栏显示内容
   pageLimit: number; // 分页数量
   performerPhoto: boolean; // 左侧栏-演员图片是否开启
+  performerSortMode: 'default' | 'resourceCountDesc' | 'hotDesc' | 'recentDesc';
+  performerRecentDays: number;
   performerPreferred: string[]; // 左侧栏-优先显示演员
+  performerPreferredEnabled: boolean; // 是否启用自定义优先演员，关闭时保留选择
   showPerformerResourceCount: boolean; // 演员卡片是否显示关联资源数量
   performerShowNum: number; // 左侧栏-演员显示数量
   performer_Text: string; // 演员显示名称
@@ -122,6 +125,9 @@ export const defualtConfigApp: I_config_app = {
   showPerformerResourceCount: true,
   performerShowNum: 12,
   performerPreferred: [],
+  performerPreferredEnabled: true,
+  performerSortMode: 'default',
+  performerRecentDays: 30,
   pageLimit: 32,
   sortMode: 'desc',
   resourcesShowMode: 'coverPoster',

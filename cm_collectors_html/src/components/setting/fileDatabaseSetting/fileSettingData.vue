@@ -30,6 +30,21 @@
           :performer-bases-ids="[store.filesBasesStoreData.getMainPerformerBasesIdByFilesBasesId(filesBasesInfo.id)]" />
       </el-form-item>
 
+      <el-form-item :label="filesConfig.performerPreferredEnabled ? '其余演员排序' : '演员排序'">
+        <el-select v-model="filesConfig.performerSortMode">
+          <el-option label="默认排序" value="default" />
+          <el-option label="资源数量最多" value="resourceCountDesc" />
+          <el-option label="播放热度最高" value="hotDesc" />
+          <el-option label="近期偏好" value="recentDesc" />
+        </el-select>
+        <el-checkbox v-model="filesConfig.performerPreferredEnabled" label="启用自定义优先演员" />
+        <div class="performer-sort-hint">取消勾选后全部按所选规则排序，上方选择仍会保留；所有模式均遵守“屏蔽无照片演员”。</div>
+      </el-form-item>
+      <el-form-item v-if="filesConfig.performerSortMode === 'recentDesc'" label="近期统计天数">
+        <el-input-number v-model="filesConfig.performerRecentDays" :min="1" :max="365" :precision="0" />
+        <div class="performer-sort-hint">按当前库最近 N 天（含今天）的播放次数排序；从升级后开始统计，无记录时按默认排序补齐。</div>
+      </el-form-item>
+
       <el-form-item label="封面上显示标签(自定义)">
         <selectTag ref="selectTagRef" v-model="filesConfig.coverDisplayTag" data-source="database"
           :filesBasesId="props.filesBasesId" multiple reorder />
@@ -263,5 +278,12 @@ onMounted(() => {
     justify-content: space-between;
     align-items: center;
   }
+}
+.performer-sort-hint {
+  width: 100%;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 6px;
 }
 </style>

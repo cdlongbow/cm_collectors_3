@@ -37,6 +37,7 @@ func autoMigrate(db *gorm.DB) error {
 		&PerformerTag{},
 		&PerformersTags{},
 		&Resources{},
+		&ResourcePlayDaily{},
 		&ResourcesDirectors{},
 		&ResourcesDramaSeries{},
 		&ResourcesPerformers{},
@@ -514,6 +515,7 @@ func AutoDatabase(db *gorm.DB) error {
 				return migrateResourceSubtitleSchema(tx)
 			},
 		},
+		{ID: "resource_play_daily_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&ResourcePlayDaily{}) }},
 		{ID: "shared_library_config_v1", Migrate: func(tx *gorm.DB) error { return tx.AutoMigrate(&SharedLibraryConfig{}, &LibraryConfigFollow{}) }},
 	})
 	errMigrate := m.Migrate()

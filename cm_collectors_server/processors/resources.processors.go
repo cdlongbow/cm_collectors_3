@@ -492,14 +492,7 @@ func (Resources) SetResources(db *gorm.DB, resourceID string, par *datatype.ReqP
 func (Resources) UpdateResourcePlay(resourceInfo *models.Resources, lastPlayFile string) error {
 	db := core.DBS()
 	return db.Transaction(func(tx *gorm.DB) error {
-		lastPlayTime := datatype.CustomTime(core.TimeNow())
-		resourceModels := models.Resources{
-			ID:           resourceInfo.ID,
-			Hot:          resourceInfo.Hot + 1,
-			LastPlayTime: &lastPlayTime,
-			LastPlayFile: lastPlayFile,
-		}
-		err := resourceModels.Update(tx, &resourceModels, []string{"Hot", "LastPlayTime", "LastPlayFile"})
+		err := models.RecordResourcePlay(tx, resourceInfo.ID, lastPlayFile, core.TimeNow())
 		if err != nil {
 			return err
 		}

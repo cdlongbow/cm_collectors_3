@@ -135,11 +135,15 @@ export const appStoreData = defineStore('app', {
 
       const tagPromise = this.initTagData(filesBasesId);
       const topPreferredPerformersPromise = performerServer.listTopPreferredPerformers(
-        this.currentConfigApp.performerPreferred,
+        this.currentConfigApp.performerPreferredEnabled !== false
+          ? this.currentConfigApp.performerPreferred
+          : [],
         this.currentMainPerformerBasesId,
         this.currentConfigApp.shieldNoPerformerPhoto,
         this.currentConfigApp.performerShowNum,
-        filesBasesId
+        filesBasesId,
+        this.currentConfigApp.performerSortMode,
+        this.currentConfigApp.performerRecentDays
       );
 
       const [tagResult, topPreferredPerformersResult] = await Promise.all([
