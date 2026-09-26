@@ -1,6 +1,6 @@
 <template>
   <div class="shared-fields">
-    <el-divider content-position="left">基础设置</el-divider>
+    <SettingSectionTitle>基础设置</SettingSectionTitle>
     <el-form-item label="国家列表">
       <selectCountry v-model="config.country" multiple />
     </el-form-item>
@@ -10,7 +10,7 @@
     <el-form-item label="资源排序">
       <selectResourceSort v-model="config.resourceSort" multiple />
     </el-form-item>
-    <el-divider content-position="left">左侧边栏</el-divider>
+    <SettingSectionTitle>左侧边栏</SettingSectionTitle>
     <el-form-item label="左侧边栏显示项">
       <selectLeftDisplay v-model="config.leftDisplay" multiple />
     </el-form-item>
@@ -48,7 +48,7 @@
     <el-form-item label="演员标签显示数量">
       <el-input-number v-model="config.performerShowNum" />
     </el-form-item>
-    <el-divider content-position="left">显示设置</el-divider>
+    <SettingSectionTitle>显示设置</SettingSectionTitle>
     <el-form-item label="分页显示数量">
       <el-input-number v-model="config.pageLimit" />
     </el-form-item>
@@ -181,7 +181,7 @@
         </div>
       </div>
     </el-form-item>
-    <el-divider content-position="left">剧照设置</el-divider>
+    <SettingSectionTitle>剧照设置</SettingSectionTitle>
     <el-form-item label="显示剧照">
       <el-switch
         v-model="config.sampleStatus"
@@ -193,7 +193,7 @@
     <el-form-item label="剧照最大显示数量">
       <el-input-number v-model="config.sampleShowMax" :min="1" :max="100" />
     </el-form-item>
-    <el-divider content-position="left">参数设置</el-divider>
+    <SettingSectionTitle>参数设置</SettingSectionTitle>
     <el-form-item label="视频 - 打开方式">
       <el-select v-model="config.openResModeMovies">
         <el-option label="内置" :value="E_resourceOpenMode.Soft" />
@@ -222,7 +222,7 @@
     <el-form-item label="获取视频预览图关键帧数量">
       <el-input-number v-model="config.videoPreviewImageCount" :min="1" :max="200" />
     </el-form-item>
-    <el-divider content-position="left">演员&导演自定义</el-divider>
+    <SettingSectionTitle>演员&导演自定义</SettingSectionTitle>
     <el-form-item label="演员显示文字">
       <el-input v-model="config.performer_Text" />
     </el-form-item>
@@ -236,7 +236,7 @@
         border
       />
     </el-form-item>
-    <el-divider content-position="left">插件设置</el-divider>
+    <SettingSectionTitle>插件设置</SettingSectionTitle>
     <el-form-item label="Cup插件">
       <el-checkbox v-model="config.plugInUnit_Cup" label="开启演员Cup插件" border />
       <alert-msg color="warning">
@@ -246,7 +246,7 @@
     <el-form-item label="Cup显示文字">
       <el-input v-model="config.plugInUnit_Cup_Text" />
     </el-form-item>
-    <el-divider content-position="left">封面海报设置</el-divider>
+    <SettingSectionTitle>封面海报设置</SettingSectionTitle>
     <el-form-item label="封面海报显示宽度">
       <el-checkbox v-model="config.coverPosterWidthStatus" label="开启封面海报宽度控制" border />
       <alert-msg color="warning"> 开启该功能，会限定每个资源封面海报的宽度。 </alert-msg>
@@ -276,6 +276,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import SettingSectionTitle from '@/components/setting/SettingSectionTitle.vue';
 import alertMsg from '@/components/com/feedback/alertMsg.vue'
 import type { I_config_app } from '@/dataType/config.dataType'
 import selectCountry from '@/components/com/form/selectCountry.vue'

@@ -4,7 +4,7 @@
       <SharedConfigBar ref="sharedBar" :files-bases-id="props.filesBasesId" module="display" :config="filesConfig"
         local-hint="标签与演员选择、路径、自定义头像及封面预设列表保持本库独立。" @config="applySharedConfig" @saved="emit('setSuccess', props.filesBasesId)" />
 
-      <el-divider content-position="left">本库独立设置</el-divider>
+      <SettingSectionTitle>本库独立设置</SettingSectionTitle>
       <el-form-item label="文件数据库名称">
         <el-input v-model="filesBasesInfo.name" />
       </el-form-item>
@@ -64,7 +64,6 @@
       </el-form-item>
 
       <template v-if="!sharedBar?.state?.following">
-        <el-divider content-position="left">本库展示参数</el-divider>
         <SharedDisplayFields :config="filesConfig" />
       </template>
     </el-form>
@@ -79,6 +78,7 @@
   </div>
 </template>
 <script lang="ts" setup>
+import SettingSectionTitle from '@/components/setting/SettingSectionTitle.vue';
 import { onMounted, ref } from 'vue';
 import SharedConfigBar from '@/components/setting/SharedConfigBar.vue';
 import SharedDisplayFields from '@/components/setting/sharedConfig/SharedDisplayFields.vue';

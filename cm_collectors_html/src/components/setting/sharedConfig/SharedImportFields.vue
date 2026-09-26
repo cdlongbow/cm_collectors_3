@@ -1,6 +1,6 @@
 <template>
   <div class="shared-fields">
-    <el-divider content-position="left">导入配置</el-divider>
+    <SettingSectionTitle>导入配置</SettingSectionTitle>
     <el-form-item label="监控文件后缀名">
       <selectVideoSuffixName
         v-model="config.videoSuffixName"
@@ -131,7 +131,7 @@
         </div>
       </div>
     </el-form-item>
-    <el-divider content-position="left">nfo配置</el-divider>
+    <SettingSectionTitle>nfo配置</SettingSectionTitle>
     <el-form-item>
       <div>
         <div><el-checkbox v-model="config.nfo.nfoStatus" label="导入nfo文件" /></div>
@@ -264,6 +264,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import SettingSectionTitle from '@/components/setting/SettingSectionTitle.vue';
 import type { I_config_scanDisk } from '@/dataType/config.dataType'
 import selectVideoSuffixName from '@/components/com/form/selectVideoSuffixName.vue'
 import selectImageSuffixName from '@/components/com/form/selectImageSuffixName.vue'

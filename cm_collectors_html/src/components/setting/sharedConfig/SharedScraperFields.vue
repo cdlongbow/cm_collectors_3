@@ -1,6 +1,6 @@
 <template>
   <div class="shared-fields">
-    <el-divider content-position="left">刮削配置</el-divider>
+    <SettingSectionTitle>刮削配置</SettingSectionTitle>
     <el-form-item label="监控文件后缀名">
       <selectVideoSuffixName
         v-model="config.videoSuffixName"
@@ -40,6 +40,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import SettingSectionTitle from '@/components/setting/SettingSectionTitle.vue';
 import type { I_config_scraperData } from '@/dataType/config.dataType'
 import selectVideoSuffixName from '@/components/com/form/selectVideoSuffixName.vue'
 import selectScraperConfig from '@/components/com/form/selectScraperConfig.vue'
